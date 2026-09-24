@@ -1,0 +1,221 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#1F6B5C">
+  <meta name="description" content="Speak Mandarin every day with an AI tutor.">
+  <title>Shuō ba 说吧</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon-192.png">
+  <link rel="apple-touch-icon" href="icons/icon-192.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=Noto+Serif+SC:wght@400;600&display=swap">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- HOME -->
+  <main id="home" class="view">
+    <header class="top">
+      <div class="brand">
+        <div class="seal" aria-hidden="true">说吧</div>
+        <div>
+          <h1>Shuō ba</h1>
+          <p id="greeting">Speak a little Chinese every day</p>
+        </div>
+      </div>
+      <button class="icon-btn" id="open-settings" aria-label="Settings">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15.5a3.5 3.5 0 1 0 0-7 3.5 3.5 0 0 0 0 7Zm8.3-2.6-.1-1.8 2-1.6-2-3.4-2.4.9a8 8 0 0 0-1.6-.9L15.8 3h-4l-.4 2.6c-.6.2-1.1.5-1.6.9L7.4 5.6l-2 3.4 2 1.6-.1.9v.9l-2 1.6 2 3.4 2.4-.9c.5.4 1 .7 1.6.9l.4 2.6h4l.4-2.6c.6-.2 1.1-.5 1.6-.9l2.4.9 2-3.4-1.8-1.1Z"/></svg>
+      </button>
+    </header>
+
+    <section class="hero" id="hero">
+      <button class="lili big" data-state="idle" id="hero-lili" aria-label="Tap Lìlì to hear her"></button>
+      <div class="hero-bubble">
+        <div class="hz" id="hero-zh">你好！我是丽丽。</div>
+        <div class="py" id="hero-py">Nǐ hǎo! Wǒ shì Lì li.</div>
+        <div class="en" id="hero-en">Hi! I'm Lìlì, your Chinese speaking partner. Tap me to hear me talk.</div>
+      </div>
+    </section>
+
+    <section class="card install" id="install-card" hidden>
+      <div class="install-row">
+        <div class="qr" id="qr" aria-label="QR code to open Shuō ba on your phone"></div>
+        <div class="install-text">
+          <div class="eyebrow">Get it on your phone</div>
+          <h2 id="install-title">Scan to install on Android</h2>
+          <p class="muted small" id="install-help">Scan with your phone camera, open the link in Chrome, then tap <b>⋮ → Add to Home screen</b>.</p>
+          <button class="btn primary" id="install-btn" hidden>Install Shuō ba</button>
+          <div class="url small" id="install-url"></div>
+        </div>
+      </div>
+      <button class="close" id="install-close" aria-label="Hide">×</button>
+    </section>
+
+    <section id="key-card" class="card setup" hidden>
+      <h2>Connect your AI tutor</h2>
+      <p>Shuō ba talks to Claude with your own Anthropic API key. It stays on this phone and is only sent to Anthropic.</p>
+      <ol>
+        <li>Create a key at <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">console.anthropic.com</a>.</li>
+        <li>Set a monthly spend limit there, so costs can't surprise you.</li>
+        <li>Paste the key below.</li>
+      </ol>
+      <form id="key-form" class="inline-form">
+        <input id="key-input" type="password" autocomplete="off" placeholder="sk-ant-…" aria-label="Anthropic API key">
+        <button class="btn primary" type="submit">Save key</button>
+      </form>
+    </section>
+
+    <section class="card streak">
+      <div class="streak-main">
+        <div class="streak-num" id="streak-num">0</div>
+        <div>
+          <div class="streak-label" id="streak-label">day streak</div>
+          <div class="muted small" id="week-minutes">0 min spoken this week</div>
+        </div>
+      </div>
+      <div class="week" id="week" aria-label="This week"></div>
+    </section>
+
+    <section class="card today">
+      <div class="eyebrow">Today's lesson</div>
+      <div class="today-zh" id="today-zh"></div>
+      <h2 id="today-title"></h2>
+      <p class="muted" id="today-brief"></p>
+      <div class="row">
+        <button class="btn primary big" id="start-today">Start speaking</button>
+        <button class="btn ghost" id="resume" hidden>Continue last chat</button>
+      </div>
+    </section>
+
+    <section>
+      <div class="section-head">
+        <h3>Pick another situation</h3>
+        <select id="home-level" aria-label="Level">
+          <option value="beginner">Beginner · HSK 1–2</option>
+          <option value="intermediate">Intermediate · HSK 3–4</option>
+          <option value="advanced">Advanced · HSK 5+</option>
+        </select>
+      </div>
+      <div class="cats" id="cats" role="tablist" aria-label="Categories"></div>
+      <div class="topics" id="topics"></div>
+    </section>
+
+    <section id="history-wrap" hidden>
+      <div class="section-head"><h3>Recent lessons</h3></div>
+      <div class="history" id="history"></div>
+    </section>
+  </main>
+
+  <!-- TALK -->
+  <main id="talk" class="view" hidden>
+    <header class="talk-top">
+      <button class="icon-btn" id="talk-back" aria-label="Back to home">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      <div class="talk-title">
+        <div class="talk-zh" id="talk-zh"></div>
+        <div class="talk-en" id="talk-en"></div>
+      </div>
+      <button class="btn small" id="finish">Finish</button>
+    </header>
+
+    <section class="stage" id="stage">
+      <div class="lili" data-state="idle"></div>
+      <div class="stage-text">
+        <div class="tutor-name">Lìlì <span>丽丽</span> <em class="tutor-state" id="tutor-state">Your speaking partner</em></div>
+        <div class="caption" id="caption" aria-live="polite"></div>
+      </div>
+    </section>
+
+    <div class="talk-toggles">
+      <label class="pill-toggle"><input type="checkbox" id="t-py"><span>Pinyin</span></label>
+      <label class="pill-toggle"><input type="checkbox" id="t-en"><span>English</span></label>
+      <label class="pill-toggle"><input type="checkbox" id="t-hands"><span>Hands-free</span></label>
+    </div>
+
+    <div class="chat" id="chat" aria-live="polite"></div>
+
+    <div class="dock">
+      <div class="status" id="status">Tap the mic and answer in Chinese — or in English if you're stuck</div>
+      <form id="type-form" class="type-form" hidden>
+        <input id="type-input" autocomplete="off" placeholder="Type in 汉字, pinyin or English" aria-label="Type your answer">
+        <button class="btn primary" type="submit">Send</button>
+      </form>
+      <div class="controls">
+        <button class="side-btn" id="kbd" aria-label="Type instead">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="2.5" y="6" width="19" height="12" rx="2.5" fill="none" stroke="currentColor" stroke-width="1.8"/><path d="M6 10h1M9.5 10h1M13 10h1M16.5 10h1M7 14h10" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          <span>Type</span>
+        </button>
+        <button class="mic" id="mic" aria-label="Speak Chinese">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="8.5" y="3" width="7" height="12" rx="3.5"/><path d="M5.5 11.5a6.5 6.5 0 0 0 13 0M12 18v3" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/></svg>
+        </button>
+        <button class="side-btn" id="mic-en" aria-label="Answer in English and get help">
+          <span class="en-badge">EN</span>
+          <span>Answer in English</span>
+        </button>
+      </div>
+    </div>
+  </main>
+
+  <!-- SUMMARY -->
+  <main id="summary" class="view" hidden>
+    <header class="talk-top">
+      <button class="icon-btn" id="summary-back" aria-label="Back to home">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M15 5l-7 7 7 7" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      <div class="talk-title"><div class="talk-zh">总结</div><div class="talk-en">Lesson summary</div></div>
+      <span></span>
+    </header>
+    <div id="summary-body" class="summary-body"></div>
+  </main>
+
+  <!-- SETTINGS -->
+  <dialog id="settings">
+    <form method="dialog" class="settings-form" id="settings-form">
+      <h2>Settings</h2>
+      <label class="field">
+        <span>Anthropic API key</span>
+        <input id="s-key" type="password" autocomplete="off" placeholder="sk-ant-…">
+        <small>Stored only on this phone.</small>
+      </label>
+      <label class="field">
+        <span>Tutor model</span>
+        <select id="s-model">
+          <option value="claude-opus-5">Claude Opus 5 · best corrections</option>
+          <option value="claude-sonnet-5">Claude Sonnet 5 · faster, cheaper</option>
+          <option value="claude-haiku-4-5">Claude Haiku 4.5 · fastest, cheapest</option>
+        </select>
+      </label>
+      <label class="field">
+        <span>Level</span>
+        <select id="s-level">
+          <option value="beginner">Beginner · HSK 1–2</option>
+          <option value="intermediate">Intermediate · HSK 3–4</option>
+          <option value="advanced">Advanced · HSK 5+</option>
+        </select>
+      </label>
+      <label class="field">
+        <span>Tutor speaking speed <b id="s-rate-val"></b></span>
+        <input id="s-rate" type="range" min="0.5" max="1.2" step="0.05">
+      </label>
+      <label class="field">
+        <span>Chinese voice</span>
+        <select id="s-voice"></select>
+        <small id="s-voice-note"></small>
+      </label>
+      <label class="check"><input type="checkbox" id="s-auto"> Read tutor replies aloud</label>
+      <div class="row end">
+        <button class="btn ghost" type="button" id="s-install">Install on phone (QR)</button>
+        <button class="btn ghost" type="button" id="s-test">Test voice</button>
+        <button class="btn primary" value="save" type="submit" id="s-save">Done</button>
+      </div>
+      <p class="muted small">Your practice history is kept on this phone only.</p>
+    </form>
+  </dialog>
+
+  <script src="https://cdn.jsdelivr.net/npm/qrcode-generator@1.4.4/qrcode.js"></script>
+  <script type="module" src="app.js"></script>
+</body>
+</html>

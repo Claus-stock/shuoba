@@ -1,0 +1,567 @@
+<title>Shuō ba 说吧</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600&family=Noto+Serif+SC:wght@400;600&display=swap">
+<style>
+:root{
+  --ground:#EDF0EB; --surface:#FFFFFF; --surface-2:#E2E8E2; --ink:#17201C; --muted:#56635C; --line:#CAD4CC;
+  --accent:#1F6B5C; --accent-ink:#FFFFFF; --accent-soft:#D5E8E1;
+  --t1:#C8352E; --t2:#B86A0A; --t3:#1F8352; --t4:#2A5FC4; --t5:#7A847F;
+  --good:#1F8352; --fix:#B86A0A; --err:#B3372F;
+  --hz:"Noto Serif SC","Songti SC","SimSun",serif;
+  --ui:"Instrument Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+}
+@media (prefers-color-scheme:dark){
+  :root:not([data-theme="light"]){
+    color-scheme:dark;
+    --ground:#101614; --surface:#18201D; --surface-2:#222C28; --ink:#E5ECE8; --muted:#9AA7A0; --line:#2E3A35;
+    --accent:#5FC0A6; --accent-ink:#0C1512; --accent-soft:#1D3530;
+    --t1:#FF7D72; --t2:#F0B056; --t3:#5ED296; --t4:#7EA9FF; --t5:#8E9993;
+    --good:#5ED296; --fix:#F0B056; --err:#FF7D72;
+  }
+}
+:root[data-theme="dark"]{
+  color-scheme:dark;
+  --ground:#101614; --surface:#18201D; --surface-2:#222C28; --ink:#E5ECE8; --muted:#9AA7A0; --line:#2E3A35;
+  --accent:#5FC0A6; --accent-ink:#0C1512; --accent-soft:#1D3530;
+  --t1:#FF7D72; --t2:#F0B056; --t3:#5ED296; --t4:#7EA9FF; --t5:#8E9993;
+  --good:#5ED296; --fix:#F0B056; --err:#FF7D72;
+}
+*{box-sizing:border-box}
+body{background:var(--ground);color:var(--ink);font-family:var(--ui);font-size:15px;line-height:1.5}
+.wrap{max-width:760px;margin:0 auto;padding-inline:16px;padding-block:20px 0}
+header{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap}
+.brand{display:flex;align-items:center;gap:12px}
+.seal{font-family:var(--hz);font-weight:600;font-size:22px;background:var(--accent);color:var(--accent-ink);width:48px;height:48px;border-radius:10px;display:grid;place-items:center;letter-spacing:-1px}
+.brand h1{margin:0;font-size:20px;font-weight:600;letter-spacing:.01em}
+.brand p{margin:0;color:var(--muted);font-size:13px}
+.tabs{display:flex;background:var(--surface-2);border-radius:999px;padding:3px}
+.tabs button{border:0;background:none;color:var(--muted);font:500 14px var(--ui);padding:7px 14px;border-radius:999px;cursor:pointer}
+.tabs button[aria-selected="true"]{background:var(--surface);color:var(--ink);box-shadow:0 1px 2px rgba(0,0,0,.08)}
+button:focus-visible,select:focus-visible,textarea:focus-visible,input:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+
+.controls{display:flex;flex-direction:column;gap:10px;margin-top:18px}
+.label{font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.chips{display:flex;gap:6px;flex-wrap:wrap}
+.chip{border:1px solid var(--line);background:var(--surface);color:var(--ink);font:500 13px var(--ui);padding:6px 11px;border-radius:999px;cursor:pointer;display:inline-flex;gap:6px;align-items:baseline}
+.chip .z{font-family:var(--hz);font-size:13px;color:var(--muted)}
+.chip[aria-pressed="true"]{background:var(--accent);border-color:var(--accent);color:var(--accent-ink)}
+.chip[aria-pressed="true"] .z{color:var(--accent-ink);opacity:.8}
+.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+select{font:14px var(--ui);color:var(--ink);background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:6px 8px}
+.toggle{display:inline-flex;gap:6px;align-items:center;font-size:13px;color:var(--muted);cursor:pointer}
+.ghost{border:0;background:none;color:var(--accent);font:500 13px var(--ui);cursor:pointer;padding:4px 0}
+
+.legend{display:flex;gap:10px;flex-wrap:wrap;font-size:12px;color:var(--muted)}
+.legend span b{font-weight:600}
+
+.banner{margin-top:14px;padding:10px 12px;border-radius:10px;background:var(--accent-soft);font-size:13px}
+.banner.err{background:transparent;border:1px solid var(--err);color:var(--err)}
+
+.chat{display:flex;flex-direction:column;gap:14px;margin-top:18px;padding-bottom:12px}
+.msg{max-width:92%}
+.msg.tutor{align-self:flex-start}
+.msg.me{align-self:flex-end;text-align:right}
+.who{font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);margin-bottom:4px}
+.bubble{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:12px 14px}
+.me .bubble{background:var(--accent);border-color:var(--accent);color:var(--accent-ink);display:inline-block;text-align:left;font-size:16px}
+.me .bubble .hzline{font-family:var(--hz)}
+
+.line{display:flex;flex-direction:column;gap:2px}
+.py{font-size:14px;letter-spacing:.01em;word-spacing:.12em}
+.hz{font-family:var(--hz);font-size:24px;line-height:1.45;font-weight:400}
+.en{font-size:13px;color:var(--muted)}
+.hide-en .en.opt{display:none}
+.hide-py .py.opt{display:none}
+.t1{color:var(--t1)} .t2{color:var(--t2)} .t3{color:var(--t3)} .t4{color:var(--t4)} .t5{color:var(--t5)}
+.plain-hz .hz span{color:inherit}
+
+.audio{display:flex;gap:6px;margin-top:8px}
+.play{border:1px solid var(--line);background:var(--surface-2);color:var(--ink);font:500 12px var(--ui);padding:4px 10px;border-radius:999px;cursor:pointer;display:inline-flex;gap:5px;align-items:center}
+.play svg{width:12px;height:12px;fill:currentColor}
+
+.fb{margin-top:6px;text-align:left;background:var(--surface);border:1px solid var(--line);border-left-width:4px;border-radius:10px;padding:10px 12px;display:flex;flex-direction:column;gap:6px}
+.fb.great{border-left-color:var(--good)} .fb.fix{border-left-color:var(--fix)} .fb.try{border-left-color:var(--t4)}
+.fb .tag{font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase}
+.fb.great .tag{color:var(--good)} .fb.fix .tag{color:var(--fix)} .fb.try .tag{color:var(--t4)}
+.fb .hz{font-size:20px}
+.fb .note{font-size:13px;color:var(--ink)}
+
+.sugg{margin-top:10px;display:flex;flex-direction:column;gap:6px}
+.sugg .label{margin-bottom:2px}
+.sbtn{text-align:left;border:1px dashed var(--line);background:transparent;color:var(--ink);border-radius:10px;padding:7px 10px;cursor:pointer;font:inherit;display:flex;flex-direction:column;gap:0}
+.sbtn:hover{border-color:var(--accent)}
+.sbtn .hz{font-size:17px}
+.sbtn .py{font-size:12px}
+.sbtn .en{font-size:12px}
+
+.thinking{color:var(--muted);font-size:14px;font-style:italic}
+
+.composer{position:sticky;bottom:0;background:var(--ground);padding-block:10px calc(12px + env(safe-area-inset-bottom,0px));border-top:1px solid var(--line);margin-top:8px}
+.composer form{display:flex;gap:8px;align-items:flex-end}
+textarea{flex:1;min-width:0;resize:none;font:16px var(--ui);color:var(--ink);background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:10px 12px;min-height:46px;max-height:140px}
+.send{border:0;background:var(--accent);color:var(--accent-ink);font:600 14px var(--ui);padding:0 16px;height:46px;border-radius:12px;cursor:pointer}
+.send:disabled{opacity:.5;cursor:default}
+.hint{font-size:12px;color:var(--muted);margin-top:6px}
+
+/* Phrase maker */
+.maker{margin-top:18px;display:flex;flex-direction:column;gap:14px;padding-bottom:40px}
+.maker form{display:flex;gap:8px;flex-wrap:wrap}
+.maker input{flex:1 1 240px;min-width:0;font:16px var(--ui);color:var(--ink);background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:11px 12px}
+.opts{display:flex;flex-direction:column;gap:10px}
+.opt{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:14px}
+.opt .reg{font-size:11px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--accent);margin-bottom:4px}
+.opt .hz{font-size:28px}
+.opt .note{font-size:13px;color:var(--muted);margin-top:4px}
+.words{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px}
+.word{background:var(--surface-2);border-radius:10px;padding:8px 10px;cursor:pointer;border:0;text-align:left;font:inherit;color:var(--ink)}
+.word .hz{font-size:20px}
+.word .py{font-size:12px}
+.word .en{font-size:12px}
+.tip{font-size:14px;padding:10px 12px;border-radius:10px;background:var(--accent-soft)}
+@media (prefers-reduced-motion:no-preference){.msg{animation:rise .25s ease-out}}
+@keyframes rise{from{transform:translateY(6px);opacity:.4}to{transform:none;opacity:1}}
+</style>
+
+<div class="wrap" id="app">
+  <header>
+    <div class="brand">
+      <div class="seal" aria-hidden="true">说吧</div>
+      <div>
+        <h1>Shuō ba</h1>
+        <p>Your Mandarin speaking partner</p>
+      </div>
+    </div>
+    <div class="tabs" role="tablist">
+      <button role="tab" id="tab-chat" aria-selected="true">Conversation</button>
+      <button role="tab" id="tab-maker" aria-selected="false">How do I say…</button>
+    </div>
+  </header>
+
+  <div id="banner" class="banner" hidden></div>
+
+  <!-- CONVERSATION -->
+  <section id="view-chat">
+    <div class="controls">
+      <div class="label">Scenario</div>
+      <div class="chips" id="scenarios"></div>
+      <div class="row">
+        <select id="level" aria-label="Level">
+          <option value="beginner">Beginner · HSK 1–2</option>
+          <option value="intermediate">Intermediate · HSK 3–4</option>
+          <option value="advanced">Advanced · HSK 5+</option>
+        </select>
+        <label class="toggle"><input type="checkbox" id="show-py" checked> Pinyin</label>
+        <label class="toggle"><input type="checkbox" id="show-en" checked> English</label>
+        <label class="toggle"><input type="checkbox" id="auto-play"> Read replies aloud</label>
+        <button class="ghost" id="restart" type="button">Restart</button>
+      </div>
+      <div class="legend" aria-label="Tone colours">
+        <span class="t1"><b>ā</b> 1st · high</span>
+        <span class="t2"><b>á</b> 2nd · rising</span>
+        <span class="t3"><b>ǎ</b> 3rd · dip</span>
+        <span class="t4"><b>à</b> 4th · falling</span>
+        <span class="t5"><b>a</b> neutral</span>
+      </div>
+    </div>
+
+    <div class="chat" id="chat" aria-live="polite"></div>
+
+    <div class="composer">
+      <form id="chat-form">
+        <textarea id="chat-input" rows="1" placeholder="Reply in 汉字, pinyin or English…" aria-label="Your reply"></textarea>
+        <button class="send" id="send" type="submit">Send</button>
+      </form>
+      <div class="hint">To practise speaking, tap the microphone on your phone keyboard and switch it to Chinese (中文). If the transcript comes out wrong, your tutor will tell you which sound or tone was probably misheard.</div>
+    </div>
+  </section>
+
+  <!-- PHRASE MAKER -->
+  <section id="view-maker" hidden>
+    <div class="maker">
+      <form id="maker-form">
+        <input id="maker-input" placeholder="e.g. Can I have the bill, please?" aria-label="What do you want to say?" value="Can I have the bill, please?">
+        <button class="send" type="submit" id="maker-go">Translate</button>
+      </form>
+      <div id="maker-out"></div>
+    </div>
+  </section>
+</div>
+
+<script>
+(() => {
+  const $ = s => document.querySelector(s);
+  const el = (tag, cls, text) => { const n = document.createElement(tag); if (cls) n.className = cls; if (text != null) n.textContent = text; return n; };
+
+  // ---------- storage (per-viewer convenience) ----------
+  const store = {
+    get(k, d) { try { const v = localStorage.getItem("shuoba:" + k); return v == null ? d : JSON.parse(v); } catch { return d; } },
+    set(k, v) { try { localStorage.setItem("shuoba:" + k, JSON.stringify(v)); } catch {} }
+  };
+
+  // ---------- scenarios ----------
+  const SCENARIOS = [
+    { id: "cafe", en: "Café", zh: "咖啡馆", role: "a barista at a café in Beijing",
+      open: { zh: "你好！欢迎光临。你想喝点什么？", pinyin: "Nǐ hǎo! Huān yíng guāng lín. Nǐ xiǎng hē diǎn shén me?", en: "Hi! Welcome. What would you like to drink?" } },
+    { id: "restaurant", en: "Restaurant", zh: "餐厅", role: "a waiter at a busy Sichuan restaurant",
+      open: { zh: "你好，请问几位？", pinyin: "Nǐ hǎo, qǐng wèn jǐ wèi?", en: "Hello, how many people?" } },
+    { id: "taxi", en: "Taxi", zh: "出租车", role: "a chatty taxi driver in Shanghai",
+      open: { zh: "你好，去哪里？", pinyin: "Nǐ hǎo, qù nǎ lǐ?", en: "Hi, where to?" } },
+    { id: "friend", en: "Meeting someone", zh: "认识朋友", role: "Wang Li, a friendly student you just met at a party",
+      open: { zh: "你好！我叫王丽。你叫什么名字？", pinyin: "Nǐ hǎo! Wǒ jiào Wáng Lì. Nǐ jiào shén me míng zi?", en: "Hi! I'm Wang Li. What's your name?" } },
+    { id: "shop", en: "Shopping", zh: "买东西", role: "a market stall seller who likes to haggle",
+      open: { zh: "你好，你想买什么？", pinyin: "Nǐ hǎo, nǐ xiǎng mǎi shén me?", en: "Hi, what would you like to buy?" } },
+    { id: "directions", en: "Directions", zh: "问路", role: "a helpful local on the street",
+      open: { zh: "你好，需要帮忙吗？", pinyin: "Nǐ hǎo, xū yào bāng máng ma?", en: "Hi, do you need some help?" } },
+    { id: "free", en: "Free chat", zh: "聊天", role: "a friendly conversation partner chatting about everyday life",
+      open: { zh: "你好！你今天怎么样？", pinyin: "Nǐ hǎo! Nǐ jīn tiān zěn me yàng?", en: "Hi! How are you today?" } },
+  ];
+  const LEVELS = {
+    beginner: "beginner (HSK 1–2): very short, simple sentences with the most common words",
+    intermediate: "intermediate (HSK 3–4): natural everyday sentences, a few new words at most",
+    advanced: "advanced (HSK 5+): fully natural, idiomatic speech",
+  };
+
+  // ---------- state ----------
+  let state = store.get("state", null) || { scenario: "cafe", level: "beginner", messages: null };
+  const scen = () => SCENARIOS.find(s => s.id === state.scenario) || SCENARIOS[0];
+  if (!state.messages) state.messages = [{ role: "tutor", data: { reply: scen().open, suggestions: exampleSuggestions() } }];
+
+  function exampleSuggestions() {
+    if (scen().id !== "cafe") return [];
+    return [
+      { zh: "我要一杯拿铁。", pinyin: "Wǒ yào yī bēi ná tiě.", en: "I'd like a latte." },
+      { zh: "有冰美式吗？", pinyin: "Yǒu bīng měi shì ma?", en: "Do you have iced americano?" },
+    ];
+  }
+  const save = () => store.set("state", state);
+
+  // ---------- tones ----------
+  const TONE = {};
+  "āēīōūǖĀĒĪŌŪǕ".split("").forEach(c => TONE[c] = 1);
+  "áéíóúǘÁÉÍÓÚǗ".split("").forEach(c => TONE[c] = 2);
+  "ǎěǐǒǔǚǍĚǏǑǓǙ".split("").forEach(c => TONE[c] = 3);
+  "àèìòùǜÀÈÌÒÙǛ".split("").forEach(c => TONE[c] = 4);
+  const toneOf = syl => { for (const c of syl.normalize("NFC")) if (TONE[c]) return TONE[c]; return 5; };
+  const isHan = c => /\p{Script=Han}/u.test(c);
+
+  // returns pinyin tokens [{text, tone|null}]
+  function pinyinTokens(py) {
+    const out = [];
+    const re = /([A-Za-züÜÀ-ɏǍ-ǜ]+)|([^A-Za-züÜÀ-ɏǍ-ǜ]+)/g;
+    let m;
+    while ((m = re.exec(py.normalize("NFC")))) out.push(m[1] ? { text: m[1], tone: toneOf(m[1]) } : { text: m[2], tone: null });
+    return out;
+  }
+
+  function lineBlock(item, opts = {}) {
+    const wrap = el("div", "line");
+    const toks = pinyinTokens(item.pinyin || "");
+    const syl = toks.filter(t => t.tone);
+    const hanChars = [...(item.zh || "")].filter(isHan);
+
+    const py = el("div", "py opt");
+    toks.forEach(t => { const s = el("span", t.tone ? "t" + t.tone : "", t.text); py.append(s); });
+
+    const hz = el("div", "hz");
+    if (hanChars.length && hanChars.length === syl.length) {
+      let i = 0;
+      for (const c of item.zh) {
+        if (isHan(c)) hz.append(el("span", "t" + syl[i++].tone, c));
+        else hz.append(document.createTextNode(c));
+      }
+    } else hz.textContent = item.zh || "";
+
+    wrap.append(py, hz);
+    if (item.en) wrap.append(el("div", "en opt", item.en));
+    if (!opts.noAudio) wrap.append(audioRow(item.zh));
+    return wrap;
+  }
+
+  // ---------- speech ----------
+  let zhVoice = null;
+  function pickVoice() {
+    if (!("speechSynthesis" in window)) return;
+    const vs = speechSynthesis.getVoices();
+    zhVoice = vs.find(v => /^zh[-_]CN/i.test(v.lang)) || vs.find(v => /^zh/i.test(v.lang) && !/HK|yue/i.test(v.lang)) || null;
+  }
+  if ("speechSynthesis" in window) { pickVoice(); speechSynthesis.addEventListener?.("voiceschanged", pickVoice); }
+  function speak(text, rate = 0.95) {
+    if (!("speechSynthesis" in window) || !text) return;
+    speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(text);
+    u.lang = "zh-CN"; u.rate = rate;
+    if (zhVoice) u.voice = zhVoice;
+    speechSynthesis.speak(u);
+  }
+  const ICON_PLAY = '<svg viewBox="0 0 12 12" aria-hidden="true"><path d="M3 1.5v9l7.5-4.5z"/></svg>';
+  function audioRow(text) {
+    const r = el("div", "audio");
+    if (!("speechSynthesis" in window) || !text) return r;
+    const b1 = el("button", "play"); b1.type = "button"; b1.innerHTML = ICON_PLAY + "<span>Listen</span>";
+    const b2 = el("button", "play"); b2.type = "button"; b2.innerHTML = ICON_PLAY + "<span>Slow</span>";
+    b1.onclick = () => speak(text, 0.95);
+    b2.onclick = () => speak(text, 0.55);
+    r.append(b1, b2);
+    return r;
+  }
+
+  // ---------- rendering ----------
+  const chat = $("#chat");
+  function renderScenarioChips() {
+    const box = $("#scenarios"); box.textContent = "";
+    SCENARIOS.forEach(s => {
+      const b = el("button", "chip"); b.type = "button";
+      b.setAttribute("aria-pressed", String(s.id === state.scenario));
+      b.append(el("span", "", s.en), el("span", "z", s.zh));
+      b.onclick = () => { if (busy) return; state.scenario = s.id; restart(); };
+      box.append(b);
+    });
+  }
+
+  function renderMessage(m) {
+    if (m.role === "me") {
+      const w = el("div", "msg me");
+      w.append(el("div", "who", "You"));
+      const b = el("div", "bubble"); b.append(el("span", "hzline", m.text));
+      w.append(b);
+      const f = m.feedback;
+      if (f && f.verdict) {
+        const kind = f.verdict === "great" ? "great" : f.verdict === "small fix" ? "fix" : "try";
+        const label = kind === "great" ? "Nice — that's natural" : kind === "fix" ? "Small fix" : "Say it like this";
+        const card = el("div", "fb " + kind);
+        card.append(el("div", "tag", label));
+        if (kind !== "great" && f.better_zh) card.append(lineBlock({ zh: f.better_zh, pinyin: f.better_pinyin }));
+        if (f.note_en) card.append(el("div", "note", f.note_en));
+        w.append(card);
+      }
+      return w;
+    }
+    const w = el("div", "msg tutor");
+    w.append(el("div", "who", m.example ? scen().zh + " · example" : scen().zh));
+    const b = el("div", "bubble");
+    b.append(lineBlock(m.data.reply));
+    const sg = m.data.suggestions || [];
+    if (sg.length) {
+      const box = el("div", "sugg");
+      box.append(el("div", "label", "You could say"));
+      sg.forEach(s => {
+        const btn = el("button", "sbtn"); btn.type = "button";
+        btn.append(lineBlock(s, { noAudio: true }));
+        btn.onclick = () => { speak(s.zh, 0.8); const t = $("#chat-input"); t.value = s.zh; t.focus(); autosize(); };
+        box.append(btn);
+      });
+      b.append(box);
+    }
+    w.append(b);
+    return w;
+  }
+
+  function renderChat() {
+    chat.textContent = "";
+    state.messages.forEach(m => chat.append(renderMessage(m)));
+  }
+
+  function applyToggles() {
+    document.getElementById("app").classList.toggle("hide-py", !$("#show-py").checked);
+    document.getElementById("app").classList.toggle("hide-en", !$("#show-en").checked);
+    store.set("prefs", { py: $("#show-py").checked, en: $("#show-en").checked, auto: $("#auto-play").checked });
+  }
+  const prefs = store.get("prefs", { py: true, en: true, auto: false });
+  $("#show-py").checked = prefs.py; $("#show-en").checked = prefs.en; $("#auto-play").checked = prefs.auto;
+  ["#show-py", "#show-en", "#auto-play"].forEach(s => $(s).addEventListener("change", applyToggles));
+  applyToggles();
+
+  $("#level").value = state.level;
+  $("#level").onchange = e => { state.level = e.target.value; save(); };
+
+  function restart() {
+    abortCtl?.abort();
+    state.messages = [{ role: "tutor", data: { reply: scen().open, suggestions: exampleSuggestions() } }];
+    save(); renderScenarioChips(); renderChat(); window.scrollTo({ top: 0 });
+  }
+  $("#restart").onclick = restart;
+
+  // ---------- AI ----------
+  let sample = null, aiOff = false, busy = false, abortCtl = null;
+  const banner = $("#banner");
+  function showBanner(text, err) { banner.textContent = text; banner.className = "banner" + (err ? " err" : ""); banner.hidden = false; }
+
+  const ERR = {
+    not_granted: "The AI tutor needs your permission to use Claude. Reload the page to be asked again.",
+    sampling_disabled: "Claude isn't available on this account, so the AI tutor is off. Listening still works.",
+    rate_limited: "Too many messages in a short time. Wait a minute, then send again.",
+    session_expired: "Your Claude session expired. Sign in again, then retry.",
+    refused: "The tutor couldn't answer that one. Try saying it a different way.",
+    invalid_json: "The tutor's answer came back garbled. Send again.",
+  };
+  const PERMANENT = new Set(["not_granted", "sampling_disabled", "not_declared", "capability_disabled", "capability_removed"]);
+  function handleError(e) {
+    if (e?.code === "cancelled") return;
+    const msg = ERR[e?.code] || "Couldn't reach the tutor. Check your connection and try again.";
+    showBanner(msg, true);
+    if (PERMANENT.has(e?.code)) { aiOff = true; setBusy(false); }
+  }
+
+  function rules() {
+    const s = scen();
+    return `You are a warm, encouraging Mandarin Chinese speaking tutor. You role-play as ${s.role}. Scenario: ${s.en}.
+The learner's level is ${LEVELS[state.level]}.
+The learner may write in Chinese characters, in pinyin (with or without tone marks), in English, or a mix. Their Chinese may come from phone speech-to-text: if a character looks wrong but sounds similar to what fits (e.g. a wrong tone or a near-homophone), assume it was misheard and say which syllable/tone to pronounce more clearly.
+
+For EVERY learner message reply with ONLY one JSON object, no other text:
+{
+  "feedback": {
+    "verdict": "great" | "small fix" | "try this",
+    "better_zh": "the natural way to say what they meant, in simplified characters",
+    "better_pinyin": "pinyin for better_zh",
+    "note_en": "one or two short sentences in English: what to fix and why (grammar, word choice, tone, measure word). For 'great', a short compliment or a tiny tip."
+  },
+  "reply": { "zh": "your in-character reply", "pinyin": "...", "en": "English translation" },
+  "suggestions": [ { "zh": "...", "pinyin": "...", "en": "..." } ]
+}
+Rules:
+- "great" = natural and correct; "small fix" = understandable but has an error; "try this" = they wrote English/pinyin only or it was hard to understand.
+- Pinyin ALWAYS with tone marks (ā á ǎ à), one syllable per word separated by a single space, one syllable for each Chinese character (write 哪里 as "nǎ lǐ", never merge syllables; avoid erhua). Keep punctuation.
+- Keep "reply" short (1–2 sentences) and matched to the level; always end with something the learner can answer, to keep the conversation going. Stay in character.
+- "suggestions": 2–3 different things the learner could say next, at their level.
+- Simplified characters only.`;
+  }
+
+  function historyTurns() {
+    const turns = [{ role: "user", content: rules() + "\n\nThe conversation starts now. Your opening line was already said." }];
+    const msgs = state.messages.slice(-24);
+    // first tutor message becomes an assistant turn
+    for (const m of msgs) {
+      if (m.role === "tutor") turns.push({ role: "assistant", content: JSON.stringify(m.data) });
+      else turns.push({ role: "user", content: m.text });
+    }
+    return turns;
+  }
+
+  function setBusy(b) {
+    busy = b;
+    $("#send").disabled = b || aiOff || !sample;
+    $("#maker-go").disabled = b || aiOff || !sample;
+  }
+
+  async function send(text) {
+    if (!sample || aiOff || busy) return;
+    banner.hidden = true;
+    state.messages.push({ role: "me", text });
+    save(); renderChat();
+    const thinking = el("div", "msg tutor");
+    thinking.append(el("div", "who", scen().zh), el("div", "thinking", "Thinking…"));
+    chat.append(thinking);
+    thinking.scrollIntoView({ behavior: "smooth", block: "end" });
+    setBusy(true);
+    abortCtl = new AbortController();
+    try {
+      const data = await sample.json(historyTurns(), { cache: false, modelTier: "quick", signal: abortCtl.signal });
+      if (!data || !data.reply || !data.reply.zh) throw { code: "invalid_json" };
+      const me = state.messages[state.messages.length - 1];
+      if (data.feedback) me.feedback = data.feedback;
+      state.messages.push({ role: "tutor", data: { reply: data.reply, suggestions: Array.isArray(data.suggestions) ? data.suggestions.slice(0, 3) : [] } });
+      save(); renderChat();
+      chat.lastElementChild?.scrollIntoView({ behavior: "smooth", block: "start" });
+      if ($("#auto-play").checked) speak(data.reply.zh);
+    } catch (e) {
+      thinking.remove();
+      handleError(e);
+    } finally { setBusy(false); }
+  }
+
+  const input = $("#chat-input");
+  function autosize() { input.style.height = "auto"; input.style.height = Math.min(input.scrollHeight, 140) + "px"; }
+  input.addEventListener("input", autosize);
+  input.addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); $("#chat-form").requestSubmit(); } });
+  $("#chat-form").addEventListener("submit", e => {
+    e.preventDefault();
+    const t = input.value.trim(); if (!t) return;
+    if (!sample || aiOff) { showBanner("The AI tutor isn't available in this view. Open the page in Claude to chat.", true); return; }
+    input.value = ""; autosize(); send(t);
+  });
+
+  // ---------- phrase maker ----------
+  const makerOut = $("#maker-out");
+  const EXAMPLE = {
+    options: [
+      { register: "Polite", zh: "服务员，请结账。", pinyin: "Fú wù yuán, qǐng jié zhàng.", en: "Waiter, the bill please.", note: "Standard and polite in any restaurant." },
+      { register: "Casual", zh: "买单！", pinyin: "Mǎi dān!", en: "Check!", note: "Very common and relaxed; fine in most places." },
+    ],
+    words: [
+      { zh: "服务员", pinyin: "fú wù yuán", en: "waiter / waitress" },
+      { zh: "请", pinyin: "qǐng", en: "please" },
+      { zh: "结账", pinyin: "jié zhàng", en: "to settle the bill" },
+      { zh: "买单", pinyin: "mǎi dān", en: "to pay the bill" },
+    ],
+    tip: "Raise your hand slightly and call 服务员 — it's normal to call out in Chinese restaurants.",
+  };
+  function renderMaker(d, isExample) {
+    makerOut.textContent = "";
+    const col = el("div", "opts");
+    if (isExample) col.append(el("div", "label", "Example"));
+    (d.options || []).forEach(o => {
+      const c = el("div", "opt");
+      if (o.register) c.append(el("div", "reg", o.register));
+      c.append(lineBlock(o));
+      if (o.note) c.append(el("div", "note", o.note));
+      col.append(c);
+    });
+    if ((d.words || []).length) {
+      col.append(el("div", "label", "Word by word · tap to hear"));
+      const g = el("div", "words");
+      d.words.forEach(w => { const b = el("button", "word"); b.type = "button"; b.append(lineBlock(w, { noAudio: true })); b.onclick = () => speak(w.zh, 0.7); g.append(b); });
+      col.append(g);
+    }
+    if (d.tip) col.append(el("div", "tip", d.tip));
+    makerOut.append(col);
+  }
+  renderMaker(EXAMPLE, true);
+
+  $("#maker-form").addEventListener("submit", async e => {
+    e.preventDefault();
+    const q = $("#maker-input").value.trim(); if (!q) return;
+    if (!sample || aiOff) { showBanner("The AI tutor isn't available in this view. Open the page in Claude to use it.", true); return; }
+    banner.hidden = true;
+    makerOut.textContent = ""; makerOut.append(el("div", "thinking", "Thinking…"));
+    setBusy(true);
+    abortCtl = new AbortController();
+    try {
+      const d = await sample.json(`You help a learner (${LEVELS[state.level]}) say things in Mandarin Chinese. They want to say (may be English, Danish or another language):
+"""${q.slice(0, 500)}"""
+Reply with ONLY this JSON:
+{"options":[{"register":"Casual"|"Polite"|"Formal","zh":"simplified characters","pinyin":"tone marks, one syllable per character, separated by single spaces, keep punctuation","en":"literal-ish English meaning","note":"when to use it, one sentence"}],
+ "words":[{"zh":"...","pinyin":"...","en":"..."}],
+ "tip":"one short pronunciation or culture tip for this phrase"}
+Give 1–3 options (most natural first) and break the first option into its key words.`, { signal: abortCtl.signal, modelTier: "default" });
+      if (!d || !Array.isArray(d.options)) throw { code: "invalid_json" };
+      renderMaker(d, false);
+    } catch (err) {
+      makerOut.textContent = "";
+      handleError(err);
+    } finally { setBusy(false); }
+  });
+
+  // ---------- tabs ----------
+  function tab(which) {
+    $("#tab-chat").setAttribute("aria-selected", String(which === "chat"));
+    $("#tab-maker").setAttribute("aria-selected", String(which === "maker"));
+    $("#view-chat").hidden = which !== "chat";
+    $("#view-maker").hidden = which !== "maker";
+  }
+  $("#tab-chat").onclick = () => tab("chat");
+  $("#tab-maker").onclick = () => tab("maker");
+
+  // ---------- boot ----------
+  renderScenarioChips(); renderChat(); setBusy(false);
+  if (!("speechSynthesis" in window)) showBanner("This browser can't read Chinese aloud. Everything else works.");
+  setTimeout(() => { if ("speechSynthesis" in window && !zhVoice && speechSynthesis.getVoices().length) showBanner("No Chinese voice is installed on this device, so Listen may sound off. Add a Chinese (Mandarin) voice in your system's speech settings."); }, 2500);
+
+  (async () => {
+    try { sample = window.claude ? await window.claude.use("sample") : null; } catch { sample = null; }
+    if (!sample) showBanner("Open this page in Claude to chat with the AI tutor. Listening and the examples work here too.", false);
+    setBusy(false);
+  })();
+})();
+</script>
