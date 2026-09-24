@@ -12,8 +12,9 @@ It's a web app (PWA). Chrome on Android installs it to your home screen like a n
 
 ## What you need
 
-1. **An Anthropic API key.** Create one at https://console.anthropic.com/settings/keys and set a monthly spend limit. The app asks for the key the first time you open it. The key is stored only on your phone.
-2. **HTTPS hosting.** The phone only lets the app use the microphone over `https://`. The simplest free option is GitHub Pages.
+1. **A free Google AI key**, for Lìlì's brain (Google Gemini, free plan). Open https://aistudio.google.com/apikey, sign in with Google, tap **Create API key**, and paste the key into the app. There's no payment and no card. On the free plan, Google may use conversations to improve its products.
+   Other brains are available in Settings: an experimental AI that runs on the phone itself (free, but it crashes on many phones), or Claude (smartest, but needs a paid Anthropic API key).
+2. **HTTPS hosting.** The phone only lets the app use the microphone over `https://`. GitHub Pages is free.
 
 ## Put it online (GitHub Pages)
 

@@ -55,18 +55,24 @@
     </section>
 
     <section id="key-card" class="card setup" hidden>
-      <h2>Connect your AI tutor</h2>
-      <p>Shuō ba talks to Claude with your own Anthropic API key. It stays on this phone and is only sent to Anthropic.</p>
-      <ol>
-        <li>Create a key at <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">console.anthropic.com</a>.</li>
-        <li>Set a monthly spend limit there, so costs can't surprise you.</li>
-        <li>Paste the key below.</li>
-      </ol>
+      <div id="gkey-help">
+        <h2>Connect Lìlì to Google's free AI</h2>
+        <p>Free: no payment and no card, just your Google account. Takes about a minute.</p>
+        <ol>
+          <li>Open <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener">aistudio.google.com/apikey</a> and sign in with Google.</li>
+          <li>Tap <b>Create API key</b>, then copy the key (it starts with <b>AIza</b>).</li>
+          <li>Come back here and paste it below.</li>
+        </ol>
+        <p class="muted small">The key stays on this phone and is only sent to Google. On the free plan Google may use conversations to improve its products.</p>
+      </div>
+      <div id="ckey-help" hidden>
+        <h2>Connect Claude</h2>
+        <p>Claude needs your own Anthropic API key, and you pay per use. Create one at <a href="https://console.anthropic.com/settings/keys" target="_blank" rel="noopener">console.anthropic.com</a>, set a spend limit, then paste it below.</p>
+      </div>
       <form id="key-form" class="inline-form">
-        <input id="key-input" type="password" autocomplete="off" placeholder="sk-ant-…" aria-label="Anthropic API key">
+        <input id="key-input" type="password" autocomplete="off" placeholder="AIza…" aria-label="API key">
         <button class="btn primary" type="submit">Save key</button>
       </form>
-      <p class="muted small">Don't want to pay? Open Settings and set <b>Lìlì's brain</b> to <b>Free</b>.</p>
     </section>
 
     <section class="card streak">
@@ -180,7 +186,10 @@
       <label class="field">
         <span>Lìlì's brain</span>
         <select id="s-model">
-          <optgroup label="Free · runs on this phone">
+          <optgroup label="Free · Google Gemini (recommended)">
+            <option value="gemini">Free · Google Gemini (fast and smart, free Google key)</option>
+          </optgroup>
+          <optgroup label="Free · runs on this phone (experimental)">
             <option value="local-standard">Free · Standard (about 1 GB download)</option>
             <option value="local-lite">Free · Lite (about 400 MB, simpler, older phones)</option>
             <option value="local-plus">Free · Plus (about 2 GB, smarter, newest phones)</option>
@@ -192,6 +201,11 @@
           </optgroup>
         </select>
         <small id="s-brain-note">Free: downloads once, then works offline. No account or payment.</small>
+      </label>
+      <label class="field" id="s-gkey-field">
+        <span>Google AI key (free)</span>
+        <input id="s-gkey" type="password" autocomplete="off" placeholder="AIza…">
+        <small>Get it at aistudio.google.com/apikey. Stored only on this phone.</small>
       </label>
       <label class="field" id="s-key-field">
         <span>Anthropic API key</span>

@@ -101,7 +101,7 @@ export async function resetLocal() {
   engineId = null;
   if (e) await e.unload().catch(() => {});
 }
-export const isEngineBroken = (e) => /disposed|device.*lost|lost.*device|GPUDevice|out of memory|OOM/i.test(String(e?.message || e));
+export const isEngineBroken = (e) => /disposed|device|lost|GPU|mapAsync|Instance reference|out of memory|OOM/i.test(String(e?.message || e));
 
 // Fill in pinyin for every Chinese line in a reply: {zh} → pinyin, better_zh → better_pinyin.
 export async function addPinyin(obj) {

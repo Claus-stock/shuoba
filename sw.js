@@ -1,12 +1,13 @@
 // Caches the app shell so Shuō ba opens instantly and installs as an app.
 // API calls to Anthropic are never cached. The free AI's model files live in WebLLM's own caches, which we never delete.
-const CACHE = "shuoba-v6";
+const CACHE = "shuoba-v7";
 const SHELL = [
   "./",
   "index.html",
   "style.css",
   "app.js",
   "local-ai.js",
+  "gemini.js",
   "manifest.webmanifest",
   "icons/icon-192.png",
   "icons/icon-512.png",

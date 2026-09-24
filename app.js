@@ -1,5 +1,6 @@
 import Anthropic from "https://cdn.jsdelivr.net/npm/@anthropic-ai/sdk/+esm";
 import { LOCAL_MODELS, loadLocal, localChat, localReady, addPinyin, resetLocal, isEngineBroken } from "./local-ai.js";
+import { askGemini } from "./gemini.js";
 
 /* =========================================================================
    Shuō ba 说吧 — a daily Mandarin speaking partner.
@@ -81,7 +82,7 @@ const LEVELS = {
 // ---------------------------------------------------------------- storage
 const KEY = "shuoba:v1";
 const defaults = {
-  settings: { apiKey: "", model: "claude-opus-5", level: "beginner", rate: 0.9, voice: "", autoSpeak: true, showPy: true, showEn: true, handsFree: true, v2: true, brain: "local", localSize: "standard" },
+  settings: { apiKey: "", model: "claude-opus-5", level: "beginner", rate: 0.9, voice: "", autoSpeak: true, showPy: true, showEn: true, handsFree: true, v2: true, v4: true, brain: "gemini", localSize: "standard", geminiKey: "", geminiModel: "" },
   days: [],
   minutes: {},
   history: [],
@@ -97,6 +98,8 @@ function load() {
     if (!raw.settings?.v2) { settings.handsFree = true; settings.v2 = true; }
     // v3: a free on-phone AI became the default; keep Claude for anyone who already added a key.
     if (!raw.settings?.brain) settings.brain = raw.settings?.apiKey ? "claude" : "local";
+    // v4: the on-phone AI crashes on many phones, so Google's free Gemini became the default.
+    if (!raw.settings?.v4) { if (settings.brain === "local") settings.brain = "gemini"; settings.v4 = true; }
     return { ...structuredClone(defaults), ...raw, settings };
   } catch {
     return structuredClone(defaults);
@@ -425,7 +428,8 @@ Formatting: simplified characters only. Pinyin always with tone marks, one sylla
 
 const START_INSTRUCTION = `[start] Begin the lesson. Reply with goal_en (one sentence: what the learner will be able to do after this lesson), 3–5 key_phrases they will need, your opening line as reply, and 2–3 suggestions for how they could answer it.`;
 
-const needsKey = () => db.settings.brain === "claude" && !db.settings.apiKey;
+const needsKey = () =>
+  (db.settings.brain === "claude" && !db.settings.apiKey) || (db.settings.brain === "gemini" && !db.settings.geminiKey);
 
 let client = null;
 function getClient() {
@@ -538,19 +542,38 @@ async function ensureLocal() {
 }
 
 // One entry point for both brains. kind: "start" | "turn" | "summary".
+const summarySystem = (topic, level) =>
+  `You are a Mandarin speaking coach reviewing a short role-play lesson (${topic.en}) with a ${LEVELS[level]} learner. Learner lines marked "spoken" came from speech recognition, so wrong characters there usually mean a pronunciation slip.`;
+const summaryPrompt = (transcript) =>
+  `Transcript:\n${transcript}\n\nWrite the lesson summary: stars (1–5, how well they managed at their level — be encouraging but honest), praise_en (one or two sentences on what went well), fixes (the 1–4 most useful corrections, quoting what they said), new_words (4–8 useful words or phrases from this lesson they should remember), next_time_en (one concrete tip for next time). Chinese in simplified characters; pinyin with tone marks, one syllable per character separated by spaces.`;
+
+// The JSON shape Gemini fills in for a turn (pinyin is then set from a dictionary, like the on-phone AI).
+const G_TURN_SHAPE = {
+  ...L_TURN_EX,
+  feedback: { ...L_TURN_EX.feedback, pronunciation_tip: "<tip or empty>" },
+  suggestions: [L_LINE_EX, L_LINE_EX],
+  lesson_done: false,
+};
+
 async function askAI(kind, { topic, level, messages, transcript }) {
   if (db.settings.brain === "claude") {
     if (kind === "summary") {
-      return askClaude({
-        system: `You are a Mandarin speaking coach reviewing a short role-play lesson (${topic.en}) with a ${LEVELS[level]} learner. Learner lines marked "spoken" came from speech recognition, so wrong characters there usually mean a pronunciation slip.`,
-        messages: [{
-          role: "user",
-          content: `Transcript:\n${transcript}\n\nWrite the lesson summary: stars (1–5, how well they managed at their level — be encouraging but honest), praise_en (one or two sentences on what went well), fixes (the 1–4 most useful corrections, quoting what they said), new_words (4–8 useful words or phrases from this lesson they should remember), next_time_en (one concrete tip for next time). Chinese in simplified characters; pinyin with tone marks, one syllable per character separated by spaces.`,
-        }],
-        schema: SUMMARY_SCHEMA,
-      });
+      return askClaude({ system: summarySystem(topic, level), messages: [{ role: "user", content: summaryPrompt(transcript) }], schema: SUMMARY_SCHEMA });
     }
     return askClaude({ system: tutorRules(topic, level), messages, schema: kind === "start" ? START_SCHEMA : TURN_SCHEMA });
+  }
+
+  if (db.settings.brain === "gemini") {
+    const shape = kind === "start" ? L_START_EX : kind === "turn" ? G_TURN_SHAPE : L_SUMMARY_EX;
+    const base = kind === "summary" ? summarySystem(topic, level) : tutorRules(topic, level);
+    const res = await askGemini({
+      key: db.settings.geminiKey,
+      model: db.settings.geminiModel,
+      system: `${base}\n\nReply with ONLY one JSON object in exactly this shape, replacing every <...> with your own content:\n${JSON.stringify(shape)}`,
+      messages: kind === "summary" ? [{ role: "user", content: summaryPrompt(transcript) }] : messages,
+      onModel: (m) => { db.settings.geminiModel = m; save(); },
+    });
+    return finishReply(kind, res, true);
   }
 
   const run = () => {
@@ -584,12 +607,19 @@ Write: stars (1–5), praise_en (one encouraging sentence), fixes (up to 3 corre
     // The engine broke (or rambled): start it fresh and try once more.
     console.warn("Free AI retry after", e);
     if (isEngineBroken(e)) {
+      // The phone's GPU gave up: start fresh with the smaller Lite model, which needs far less memory.
       await resetLocal();
+      if (db.settings.localSize !== "lite") { db.settings.localSize = "lite"; save(); }
       await ensureLocal();
     }
     res = await run();
   }
-  // A small model sometimes leaves fields out; fill the gaps so the screen still works.
+  return finishReply(kind, res, false);
+}
+
+// Fill gaps a model left, then add pinyin from the dictionary. keepExtras: the model can judge
+// pronunciation and when the lesson is over (Gemini); the small on-phone model can't.
+async function finishReply(kind, res, keepExtras) {
   const d = res.data || {};
   // Drop any <placeholder> the model left unfilled.
   const clean = (o) => {
@@ -616,18 +646,27 @@ Write: stars (1–5), praise_en (one encouraging sentence), fixes (up to 3 corre
   res.data = d;
   await addPinyin(res.data);
   if (kind === "turn") {
-    res.data.feedback.pronunciation_tip = "";
-    res.data.lesson_done = false;
+    const f = res.data.feedback;
+    f.pronunciation_tip = keepExtras && typeof f.pronunciation_tip === "string" ? f.pronunciation_tip : "";
+    res.data.lesson_done = keepExtras ? res.data.lesson_done === true : false;
   }
   return res;
 }
 
 function errorMessage(e) {
-  if (e?.code === "no_webgpu") return "This phone's browser can't run the free AI. Update Chrome and try again, or switch to Claude in Settings.";
-  if (db.settings.brain !== "claude" && !(e instanceof Anthropic.APIError) && !e?.code) {
-    return /memory|device|lost|allocate/i.test(String(e?.message || e))
-      ? "The free AI ran out of memory. Close other apps, or pick Lite in Settings."
-      : "The free AI had a problem. Check your internet for the first download, then try again.";
+  if (e?.code === "no_webgpu") return "This phone can't run the on-phone AI. Switch Lìlì's brain to Google (free) in Settings.";
+  if (e?.code === "no_gkey") return "Add your free Google key first (see the home screen).";
+  if (e?.code === "gemini_offline") return "No internet connection. Check it and try again.";
+  if (e?.code === "gemini_http") {
+    if (e.status === 400 && /api key|API_KEY/i.test(e.message)) return "Google rejected your key. Copy it again from aistudio.google.com and paste it in Settings.";
+    if (e.status === 403) return "Your Google key isn't allowed to use Gemini. Create a new key at aistudio.google.com.";
+    if (e.status === 429) return "Google's free limit is used up for the moment. Wait a minute and try again (the daily limit resets overnight).";
+    return `Google's AI had a problem (${e.status}). Try again.`;
+  }
+  if (db.settings.brain === "local" && typeof e?.code !== "string" && !(e instanceof Anthropic.APIError)) {
+    return isEngineBroken(e)
+      ? "Your phone's graphics chip couldn't run the on-phone AI. Switch to Google's free AI instead."
+      : "The on-phone AI had a problem. Check your internet for the first download, then try again.";
   }
   if (e?.code === "no_key") return "Add your Anthropic API key in Settings first.";
   if (e?.code === "refusal") return "The tutor couldn't answer that. Try saying it another way.";
@@ -658,7 +697,7 @@ function errorDetails(e) {
   const gpu = navigator.gpu ? "WebGPU yes" : "WebGPU no";
   const what = e?.code || e?.name || "Error";
   const msg = String(e?.message || (typeof e === "string" ? e : "") || "").replace(/\s+/g, " ").slice(0, 220);
-  const model = db.settings.brain === "claude" ? db.settings.model : `free-${db.settings.localSize}`;
+  const model = db.settings.brain === "claude" ? db.settings.model : db.settings.brain === "gemini" ? (db.settings.geminiModel || "gemini") : `phone-${db.settings.localSize}`;
   return `Details: ${what}${msg ? " – " + msg : ""} · ${model} · ${gpu} · ${lastLoadStep || "no load step"}`;
 }
 function showErrorDetails(e) {
@@ -776,8 +815,14 @@ async function tutorTurn(userMsg, schema, isStart) {
     showErrorDetails(e);
     if (isStart) {
       const retry = el("button", "btn primary", "Try again");
-      retry.onclick = () => { retry.remove(); tutorTurn(userMsg, schema, true); };
+      retry.onclick = () => { retry.remove(); switchBtn?.remove(); tutorTurn(userMsg, schema, true); };
       chat.append(retry);
+      let switchBtn = null;
+      if (db.settings.brain === "local") {
+        switchBtn = el("button", "btn ghost", "Use Google's free AI instead");
+        switchBtn.onclick = () => { db.settings.brain = "gemini"; save(); goHome(); };
+        chat.append(switchBtn);
+      }
     }
   }
 }
@@ -958,6 +1003,10 @@ function renderSummary(entry) {
 // ---------------------------------------------------------------- home
 function renderHome() {
   $("#key-card").hidden = !needsKey();
+  const claude = db.settings.brain === "claude";
+  $("#gkey-help").hidden = claude;
+  $("#ckey-help").hidden = !claude;
+  $("#key-input").placeholder = claude ? "sk-ant-…" : "AIza…";
   const hour = new Date().getHours();
   $("#greeting").textContent = hour < 11 ? "早上好 · Good morning" : hour < 18 ? "下午好 · Good afternoon" : "晚上好 · Good evening";
 
@@ -1075,7 +1124,8 @@ function fillVoiceSelect() {
 function openSettings() {
   const s = db.settings;
   $("#s-key").value = s.apiKey;
-  $("#s-model").value = s.brain === "claude" ? s.model : `local-${s.localSize || "standard"}`;
+  $("#s-gkey").value = s.geminiKey || "";
+  $("#s-model").value = s.brain === "claude" ? s.model : s.brain === "gemini" ? "gemini" : `local-${s.localSize || "standard"}`;
   syncBrainField();
   $("#s-level").value = s.level;
   $("#s-rate").value = s.rate;
@@ -1093,8 +1143,11 @@ $("#s-test").addEventListener("click", () => {
 $("#settings-form").addEventListener("submit", () => {
   const s = db.settings;
   s.apiKey = $("#s-key").value.trim();
+  s.geminiKey = $("#s-gkey").value.trim();
   const choice = $("#s-model").value;
-  if (choice.startsWith("local-")) {
+  if (choice === "gemini") {
+    s.brain = "gemini";
+  } else if (choice.startsWith("local-")) {
     s.brain = "local";
     s.localSize = choice.slice(6);
   } else {
@@ -1110,11 +1163,16 @@ $("#settings-form").addEventListener("submit", () => {
 });
 $("#open-settings").onclick = openSettings;
 function syncBrainField() {
-  const local = $("#s-model").value.startsWith("local-");
-  $("#s-key-field").hidden = local;
-  $("#s-brain-note").textContent = local
-    ? "Free: downloads once, then works offline. No account or payment."
-    : "Claude is smarter but needs an Anthropic API key, and you pay per use.";
+  const v = $("#s-model").value;
+  const local = v.startsWith("local-");
+  const gemini = v === "gemini";
+  $("#s-key-field").hidden = local || gemini;
+  $("#s-gkey-field").hidden = !gemini;
+  $("#s-brain-note").textContent = gemini
+    ? "Free with a Google account. Fast and works on any phone."
+    : local
+      ? "Experimental: downloads once, but crashes on many phones."
+      : "Claude is the smartest, but needs an Anthropic API key and you pay per use.";
 }
 $("#s-model").addEventListener("change", syncBrainField);
 
@@ -1122,7 +1180,8 @@ $("#key-form").addEventListener("submit", (e) => {
   e.preventDefault();
   const k = $("#key-input").value.trim();
   if (!k) return;
-  db.settings.apiKey = k;
+  if (db.settings.brain === "claude") db.settings.apiKey = k;
+  else { db.settings.brain = "gemini"; db.settings.geminiKey = k; }
   $("#key-input").value = "";
   save();
   renderHome();
@@ -1180,7 +1239,7 @@ async function greet() {
 function talkToLili() {
   if (needsKey()) {
     greet();
-    $("#hero-en").textContent = "To talk with me, paste your Anthropic API key below first.";
+    $("#hero-en").textContent = "To talk with me, connect me to Google's free AI below first. It takes a minute.";
     $("#key-card").hidden = false;
     $("#key-card").scrollIntoView({ behavior: "smooth", block: "center" });
     return;
