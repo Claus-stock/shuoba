@@ -196,10 +196,17 @@ let voices = [];
 function loadVoices() {
   if (!("speechSynthesis" in window)) return;
   voices = speechSynthesis.getVoices().filter((v) => /^zh/i.test(v.lang) || /chinese|mandarin|普通话|中文/i.test(v.name));
-  voices.sort((a, b) => (/CN/i.test(b.lang) ? 1 : 0) - (/CN/i.test(a.lang) ? 1 : 0));
+  // Mainland Mandarin first, and voices stored on the phone before online ones (they start speaking at once).
+  const score = (v) => (/CN/i.test(v.lang) ? 2 : 0) + (v.localService ? 1 : 0);
+  voices.sort((a, b) => score(b) - score(a));
 }
 function currentVoice() {
-  return voices.find((v) => v.voiceURI === db.settings.voice) || voices.find((v) => /zh[-_]CN/i.test(v.lang)) || voices[0] || null;
+  return voices.find((v) => v.voiceURI === db.settings.voice) || voices[0] || null;
+}
+function englishVoice() {
+  const all = speechSynthesis.getVoices().filter((x) => /^en[-_]/i.test(x.lang));
+  const score = (v) => (/^en[-_](US|GB)/i.test(v.lang) ? 2 : 0) + (v.localService ? 1 : 0) + (/female|samantha|zira|aria/i.test(v.name) ? 0.5 : 0);
+  return all.sort((a, b) => score(b) - score(a))[0] || null;
 }
 if ("speechSynthesis" in window) {
   loadVoices();
@@ -208,10 +215,25 @@ if ("speechSynthesis" in window) {
 // Chrome on Android sometimes never fires "end" (for example when the utterance object gets garbage
 // collected). So: keep a reference, watch speechSynthesis.speaking, and cap the wait by text length.
 const liveUtterances = new Set();
-function speak(text, rate = db.settings.rate, lang = "zh-CN") {
+let lastSpeakEnd = 0;
+// How fast this phone's voices talk (characters per second at rate 1), measured from real sentences.
+// Used to know when a sentence is over when Chrome doesn't say so.
+const SPEED_KEY = "shuoba:speechSpeed";
+let speechSpeed = { zh: 4, en: 14 };
+try { speechSpeed = { ...speechSpeed, ...JSON.parse(localStorage.getItem(SPEED_KEY) || "{}") }; } catch { /* ignore */ }
+function learnSpeed(k, chars, ms, rate) {
+  if (chars < 4 || ms < 400) return;
+  const cps = chars / ((ms * rate) / 1000);
+  if (cps < 1 || cps > 40) return;
+  speechSpeed[k] = speechSpeed[k] * 0.6 + cps * 0.4;
+  try { localStorage.setItem(SPEED_KEY, JSON.stringify(speechSpeed)); } catch { /* ignore */ }
+}
+
+// opts.queue: add to what she is already saying instead of cutting it off (used in conversations).
+function speak(text, rate = db.settings.rate, lang = "zh-CN", opts = {}) {
   return new Promise((resolve) => {
     if (!("speechSynthesis" in window) || !text) return resolve();
-    speechSynthesis.cancel();
+    if (!opts.queue) speechSynthesis.cancel();
     const u = new SpeechSynthesisUtterance(text);
     liveUtterances.add(u);
     u.lang = lang;
@@ -220,33 +242,42 @@ function speak(text, rate = db.settings.rate, lang = "zh-CN") {
       const v = currentVoice();
       if (v) u.voice = v;
     } else {
-      const v = speechSynthesis.getVoices().find((x) => /^en[-_](US|GB)/i.test(x.lang) && /female|samantha|zira|aria|google us/i.test(x.name))
-        || speechSynthesis.getVoices().find((x) => /^en/i.test(x.lang));
+      const v = englishVoice();
       if (v) u.voice = v;
     }
     const wasState = avatarState;
     setAvatar("speaking");
+    const k = lang === "zh-CN" ? "zh" : "en";
+    // How long this sentence should take on this phone.
+    const expected = ((text.length / speechSpeed[k]) * 1000) / Math.max(0.4, rate);
     let finished = false;
     let started = false;
-    const maxMs = 4000 + text.length * (lang === "zh-CN" ? 450 : 120) / Math.max(0.4, rate);
+    let startAt = 0;
     const t0 = Date.now();
     const done = (why) => {
       if (finished) return;
       finished = true;
       clearInterval(watch);
-      liveUtterances.delete(u);
+      lastSpeakEnd = Date.now();
       if (why !== "end") dlog(`speak ${lang} ended by ${why}`);
       if (avatarState === "speaking") setAvatar(wasState === "speaking" ? "idle" : wasState);
       resolve();
     };
-    u.onstart = () => (started = true);
-    u.onend = () => done("end");
-    u.onerror = (e) => done(`error ${e?.error || ""}`);
+    u.onstart = () => { started = true; startAt = Date.now(); };
+    u.onend = () => {
+      if (startAt) learnSpeed(k, text.length, Date.now() - startAt, rate);
+      liveUtterances.delete(u);
+      done("end");
+    };
+    u.onerror = (e) => { liveUtterances.delete(u); done(`error ${e?.error || ""}`); };
     const watch = setInterval(() => {
+      const t = Date.now() - t0;
       if (speechSynthesis.speaking) started = true;
-      else if (started && !speechSynthesis.pending && Date.now() - t0 > 600) done("watchdog (no end event)");
-      if (Date.now() - t0 > maxMs) { speechSynthesis.cancel(); done("timeout"); }
-    }, 400);
+      // Chrome says it stopped speaking, but forgot the "end" event.
+      if (started && !speechSynthesis.speaking && !speechSynthesis.pending && t > 400) done("watchdog (no end event)");
+      // Chrome says nothing useful (or keeps saying "speaking"): go by how long the sentence takes.
+      else if ((startAt ? Date.now() - startAt : t - 200) > expected * 1.06 + 250) done(`estimate (${Math.round(t)} ms)`);
+    }, 150);
     speechSynthesis.speak(u);
   });
 }
@@ -352,6 +383,7 @@ function listen(lang = "zh-CN") {
   mic.classList.add("listening");
   $("#mic-en").classList.toggle("on", lang !== "zh-CN");
   const target = isCoach() ? db.session.target : null;
+  if (isCoach() && quietRounds === 0 && lastSpeakEnd) dlog(`listening [${lang}] ${Date.now() - lastSpeakEnd} ms after she stopped talking`);
   if (isCoach()) {
     setAvatar("listening", lang === "zh-CN" ? "Listening… 请说中文" : "Listening…");
     setStatus(lang === "zh-CN" ? (target ? "Your turn — say it in Chinese" : "Listening… 请说中文") : "Listening… just talk (English)", "");
@@ -422,7 +454,7 @@ function listen(lang = "zh-CN") {
     }
     // Chrome on Android sometimes ends without marking the result final: then use what it heard.
     const text = (finalText.trim() || lastHeard.trim());
-    dlog(`heard [${lang}] ${text ? `"${text}"${finalText.trim() ? "" : " (not final)"}` : errorKind ? `nothing (${errorKind})` : "nothing"}`);
+    if (text || errorKind && errorKind !== "no-speech") dlog(`heard [${lang}] ${text ? `"${text}"${finalText.trim() ? "" : " (not final)"}` : `nothing (${errorKind})`}`);
     if (text) {
       quietRounds = 0;
       markPracticed((Date.now() - started) / 60000);
@@ -442,7 +474,7 @@ function listen(lang = "zh-CN") {
         setTimeout(() => listen(lang), quietRounds >= 5 ? 5000 : 250);
       } else if (canRetry && errorKind !== "not-allowed" && errorKind !== "service-not-allowed" && quietRounds < 3) {
         quietRounds++;
-        setTimeout(() => listen(lang), 1500 * quietRounds);
+        setTimeout(() => listen(lang), 300 * 2 ** (quietRounds - 1)); // 0.3 s, 0.6 s, 1.2 s
       } else if (!$("#status").classList.contains("err")) {
         pauseCoach();
       }
@@ -1372,10 +1404,10 @@ async function speakSeg(seg, data) {
       seg.pinyin = o.pinyin;
     }
     setCaption({ zh: seg.text, pinyin: seg.pinyin, en: data.target?.zh === seg.text ? data.target.en : "" });
-    await speak(seg.text, slow ? Math.max(0.5, db.settings.rate - 0.25) : Math.max(0.6, db.settings.rate - 0.1), "zh-CN");
+    await speak(seg.text, slow ? Math.max(0.5, db.settings.rate - 0.25) : Math.max(0.6, db.settings.rate - 0.1), "zh-CN", { queue: true });
   } else {
     setCaption({ help: seg.text });
-    await speak(seg.text, 1, "en-US");
+    await speak(seg.text, 1, "en-US", { queue: true });
   }
 }
 
