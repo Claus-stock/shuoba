@@ -381,3 +381,4 @@ dialog::backdrop { background: rgba(10, 20, 16, .45); }
   color: var(--muted); cursor: pointer; padding: 4px 8px;
 }
 .talk-btn { align-self: flex-start; margin-top: 8px; }
+.details { font: 11px/1.4 ui-monospace, Consolas, monospace; color: var(--muted); margin-top: 6px; word-break: break-word; }

@@ -17,18 +17,18 @@ let engineId = null;
 let loading = null;
 let pinyinFn = null;
 
-async function modelId(size) {
+async function modelId(size, forceF32) {
   const adapter = navigator.gpu ? await navigator.gpu.requestAdapter().catch(() => null) : null;
   if (!adapter) throw { code: "no_webgpu" };
   // Phones without 16-bit float shaders need the 32-bit build.
-  const quant = adapter.features.has("shader-f16") ? "q4f16_1" : "q4f32_1";
+  const quant = adapter.features.has("shader-f16") && !forceF32 ? "q4f16_1" : "q4f32_1";
   return `${(LOCAL_MODELS[size] || LOCAL_MODELS.standard).base}-${quant}-MLC`;
 }
 
 export const localReady = () => !!engine;
 
-export async function loadLocal(size, onProgress) {
-  const id = await modelId(size);
+export async function loadLocal(size, onProgress, { forceF32 = false } = {}) {
+  const id = await modelId(size, forceF32);
   if (engine && engineId === id) return engine;
   if (loading?.id === id) return loading.promise;
   const promise = (async () => {
@@ -54,12 +54,20 @@ export async function loadLocal(size, onProgress) {
 
 export async function localChat({ system, messages, schema, maxTokens = 400 }) {
   if (!engine) throw { code: "not_loaded" };
-  const res = await engine.chat.completions.create({
+  const req = {
     messages: [{ role: "system", content: system }, ...messages],
     temperature: 0.6,
     max_tokens: maxTokens,
-    response_format: { type: "json_object", schema: JSON.stringify(schema) },
-  });
+  };
+  let res;
+  try {
+    res = await engine.chat.completions.create({ ...req, response_format: { type: "json_object", schema: JSON.stringify(schema) } });
+  } catch (e) {
+    // Some builds can't use a strict schema; fall back to plain JSON mode with the shape described in words.
+    console.warn("Schema mode failed, retrying with plain JSON", e);
+    req.messages[0] = { role: "system", content: `${system}\nJSON shape: ${JSON.stringify(schema)}` };
+    res = await engine.chat.completions.create({ ...req, response_format: { type: "json_object" } });
+  }
   const text = res.choices?.[0]?.message?.content || "";
   try {
     return { data: JSON.parse(text), raw: text };

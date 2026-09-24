@@ -518,17 +518,40 @@ Reply only with JSON.`;
 }
 const LOCAL_START = `[start] Start the role-play. goal_en: one short sentence about what the learner will practise. key_phrases: 3 useful short Chinese phrases. reply: your first line. suggestions: 2 possible answers.`;
 
+let lastLoadStep = "";
 async function ensureLocal() {
-  const size = db.settings.localSize || "standard";
   if (localReady()) return;
-  setAvatar("thinking", "Getting ready…");
-  await loadLocal(size, (p) => {
-    const pct = Math.round(p * 100);
-    setAvatar("thinking", `Getting ready… ${pct}%`);
-    setStatus(`Preparing Lìlì's free AI: ${pct}%. The first time it downloads ${LOCAL_MODELS[size].size} (use Wi-Fi). Keep this screen open.`, "");
-  });
-  setAvatar("thinking");
-  setStatus("Thinking…", "");
+  const chosen = db.settings.localSize || "standard";
+  // Try the chosen size, then a more compatible build, then the small Lite model.
+  const attempts = [
+    { size: chosen, forceF32: false },
+    { size: chosen, forceF32: true },
+    ...(chosen !== "lite" ? [{ size: "lite", forceF32: false }, { size: "lite", forceF32: true }] : []),
+  ];
+  let lastErr = null;
+  for (const [i, a] of attempts.entries()) {
+    lastLoadStep = `load ${a.size}${a.forceF32 ? " f32" : ""}`;
+    setAvatar("thinking", "Getting ready…");
+    try {
+      await loadLocal(a.size, (p, text) => {
+        const pct = Math.round(p * 100);
+        lastLoadStep = `load ${a.size}${a.forceF32 ? " f32" : ""} ${pct}% ${String(text).slice(0, 60)}`;
+        setAvatar("thinking", `Getting ready… ${pct}%`);
+        setStatus(`Preparing Lìlì's free AI: ${pct}%. The first time it downloads ${LOCAL_MODELS[a.size].size} (use Wi-Fi). Keep this screen open.`, "");
+      }, { forceF32: a.forceF32 });
+      if (a.size !== chosen) { db.settings.localSize = a.size; save(); }
+      lastLoadStep = `ready ${a.size}${a.forceF32 ? " f32" : ""}`;
+      setAvatar("thinking");
+      setStatus("Thinking…", "");
+      return;
+    } catch (e) {
+      console.error("Free AI load failed", a, e);
+      lastErr = e;
+      if (e?.code === "no_webgpu") break;
+      if (i < attempts.length - 1) setStatus("That didn't work on this phone — trying a lighter version…", "");
+    }
+  }
+  throw lastErr;
 }
 
 // One entry point for both brains. kind: "start" | "turn" | "summary".
@@ -564,6 +587,21 @@ async function askAI(kind, { topic, level, messages, transcript }) {
     const msgs = kind === "start" ? [{ role: "user", content: LOCAL_START }] : messages.slice(-7);
     res = await localChat({ system: localRules(topic, level), messages: msgs, schema: kind === "start" ? L_START : L_TURN, maxTokens: kind === "start" ? 450 : 320 });
   }
+  // A small model sometimes leaves fields out; fill the gaps so the screen still works.
+  const d = res.data || {};
+  if (kind !== "summary") {
+    d.reply = d.reply && typeof d.reply === "object" ? d.reply : { zh: String(d.reply || ""), en: "" };
+    if (!d.reply.zh) throw { code: "bad_json", message: res.raw?.slice(0, 120) };
+    d.suggestions = Array.isArray(d.suggestions) ? d.suggestions.filter((x) => x?.zh) : [];
+    d.help_en = typeof d.help_en === "string" ? d.help_en : "";
+    d.goal_en = d.goal_en || "Practise a short, everyday conversation.";
+    d.key_phrases = Array.isArray(d.key_phrases) ? d.key_phrases.filter((x) => x?.zh) : [];
+    d.feedback = d.feedback && typeof d.feedback === "object" ? d.feedback : { verdict: "great", better_zh: "", note_en: "" };
+  } else {
+    d.fixes = Array.isArray(d.fixes) ? d.fixes : [];
+    d.new_words = Array.isArray(d.new_words) ? d.new_words.filter((x) => x?.zh) : [];
+  }
+  res.data = d;
   await addPinyin(res.data);
   if (kind === "turn") {
     res.data.feedback.pronunciation_tip = "";
@@ -601,6 +639,19 @@ function setStatus(text, kind) {
   const s = $("#status");
   s.textContent = text;
   s.className = "status" + (kind ? " " + kind : "");
+}
+
+// The technical reason behind an error, shown small so a screenshot says what really failed.
+function errorDetails(e) {
+  const gpu = navigator.gpu ? "WebGPU yes" : "WebGPU no";
+  const what = e?.code || e?.name || "Error";
+  const msg = String(e?.message || (typeof e === "string" ? e : "") || "").replace(/\s+/g, " ").slice(0, 220);
+  const model = db.settings.brain === "claude" ? db.settings.model : `free-${db.settings.localSize}`;
+  return `Details: ${what}${msg ? " – " + msg : ""} · ${model} · ${gpu} · ${lastLoadStep || "no load step"}`;
+}
+function showErrorDetails(e) {
+  const s = $("#status");
+  s.append(el("div", "details", errorDetails(e)));
 }
 function setBusy(b) {
   busy = b;
@@ -710,6 +761,7 @@ async function tutorTurn(userMsg, schema, isStart) {
     setBusy(false);
     setAvatar("idle", "Hmm, something went wrong");
     setStatus(errorMessage(e), "err");
+    showErrorDetails(e);
     if (isStart) {
       const retry = el("button", "btn primary", "Try again");
       retry.onclick = () => { retry.remove(); tutorTurn(userMsg, schema, true); };
@@ -824,7 +876,7 @@ async function finish() {
     console.error(e);
     body.textContent = "";
     const c = el("div", "card");
-    c.append(el("p", "", errorMessage(e)));
+    c.append(el("p", "", errorMessage(e)), el("div", "details", errorDetails(e)));
     const retry = el("button", "btn primary", "Try again");
     retry.onclick = finish;
     const skip = el("button", "btn ghost", "Skip summary");
