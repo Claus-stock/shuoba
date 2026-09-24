@@ -20,8 +20,9 @@ export function askGemini({ key, model, system, messages, maxTokens = 1024, onMo
 
 // A streamed plain-text answer: onDelta(text) gets each piece as soon as Google sends it, so speaking
 // can start before the whole answer exists. Resolves with the full text.
-export function streamGemini({ key, model, system, messages, maxTokens = 1024, onModel, onBusy, onDelta }) {
-  return withModels({ key, model, onModel, onBusy }, (m) => streamCall(key, m, system, messages, maxTokens, onDelta));
+// search: let the model look things up with Google Search (current news, results, facts).
+export function streamGemini({ key, model, system, messages, maxTokens = 1024, onModel, onBusy, onDelta, search = false }) {
+  return withModels({ key, model, onModel, onBusy }, (m) => streamCall(key, m, system, messages, maxTokens, onDelta, undefined, search));
 }
 
 // Try the remembered model first. If it is busy, retry with a pause; if it is gone or stays busy,
@@ -89,13 +90,14 @@ async function flashModels(key) {
   }
 }
 
-function requestBody(model, system, messages, maxTokens, json, level) {
+function requestBody(model, system, messages, maxTokens, json, level, search = false) {
   const body = {
     systemInstruction: { parts: [{ text: system }] },
     contents: messages.map((m) => ({ role: m.role === "assistant" ? "model" : "user", parts: [{ text: m.content }] })),
     generationConfig: { temperature: 0.7, maxOutputTokens: maxTokens },
   };
   if (json) body.generationConfig.responseMimeType = "application/json";
+  if (search) body.tools = [{ google_search: {} }];
   const thinking = THINKING_LEVELS[level];
   if (thinking) {
     if (/^gemini-2\.5-flash/.test(model)) body.generationConfig.thinkingConfig = { thinkingBudget: 0 };
@@ -141,12 +143,16 @@ async function call(key, model, system, messages, maxTokens, level = thinkingFor
   return { data, raw: text };
 }
 
-async function streamCall(key, model, system, messages, maxTokens, onDelta, level = thinkingFor.get(model) ?? 0) {
-  const body = requestBody(model, system, messages, maxTokens, false, level);
+async function streamCall(key, model, system, messages, maxTokens, onDelta, level = thinkingFor.get(model) ?? 0, search = false) {
+  const body = requestBody(model, system, messages, maxTokens, false, level, search);
   const r = await post(`${API}/models/${model}:streamGenerateContent?alt=sse`, key, body);
   if (!r.ok) {
     const err = await httpError(r);
-    if (thinkingRejected(err, body)) return streamCall(key, model, system, messages, maxTokens, onDelta, level + 1);
+    if (thinkingRejected(err, body)) return streamCall(key, model, system, messages, maxTokens, onDelta, level + 1, search);
+    // Search not available for this model or key: answer without it rather than not at all.
+    if (search && err.status === 400 && /search|tool|grounding/i.test(err.message)) {
+      return streamCall(key, model, system, messages, maxTokens, onDelta, level, false);
+    }
     throw err;
   }
   thinkingFor.set(model, level);

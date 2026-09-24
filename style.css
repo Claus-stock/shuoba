@@ -399,3 +399,16 @@ dialog::backdrop { background: rgba(10, 20, 16, .45); }
 .coach-mode #stage .lili { cursor: pointer; }
 pre.log { font: 11px/1.45 ui-monospace, Consolas, monospace; background: var(--surface-2); border-radius: 10px; padding: 10px; max-height: 260px; overflow: auto; white-space: pre-wrap; word-break: break-word; margin: 0; }
 .coach-note { font-size: 13px; color: var(--muted); border-top: 1px dashed var(--line); padding-top: 6px; }
+
+/* ---------- Lena (German) ---------- */
+.lili.lena { --av-hair: #C8963E; --av-top: #2A4F8F; --av-bg: #DCE6F5; --av-skin: #F7DFD0; --av-cheek: #F0A3A0; }
+@media (prefers-color-scheme: dark) { .lili.lena { --av-bg: #1E2A40; --av-top: #5B86D6; } }
+.lena-card { display: flex; gap: 14px; align-items: center; }
+.lena-card .lili { width: 96px; cursor: pointer; }
+.lena-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 6px; align-items: flex-start; }
+.lena-text p { margin: 0; }
+.seg { display: inline-flex; background: var(--surface-2); border-radius: 999px; padding: 3px; }
+.seg button { border: 0; background: none; padding: 6px 12px; border-radius: 999px; font-weight: 600; font-size: 13px; color: var(--muted); cursor: pointer; }
+.seg button[aria-pressed="true"] { background: var(--surface); color: var(--ink); box-shadow: 0 1px 2px rgba(0, 0, 0, .08); }
+.de-fix { font-size: 16px; font-weight: 600; }
+@media (max-width: 380px) { .lena-card { flex-direction: column; align-items: flex-start; } }

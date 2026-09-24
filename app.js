@@ -60,6 +60,7 @@ const TOPICS = [
   { id: "cinema", cat: "social", zh: "看电影", en: "Going to the movies", role: "a friend deciding which film to see" },
   { id: "free", cat: "social", zh: "随便聊聊", en: "Free chat", role: "a warm, curious friend chatting about everyday life" },
   { id: "coach", cat: "coach", zh: "和冰冰聊天", en: "Talk with Bīng", role: "your speaking coach" },
+  { id: "german", cat: "coach", zh: "Deutsch", en: "Deutsch mit Lena", role: "a German conversation partner" },
   // Business
   { id: "work", cat: "business", zh: "自我介绍", en: "Introducing yourself at work", role: "a new colleague on your first day at a company in Shanghai" },
   { id: "networking", cat: "business", zh: "交换名片", en: "Networking & business cards", role: "a sales director you meet at an industry event, exchanging business cards" },
@@ -83,7 +84,7 @@ const LEVELS = {
 // ---------------------------------------------------------------- storage
 const KEY = "shuoba:v1";
 const defaults = {
-  settings: { apiKey: "", model: "claude-opus-5", level: "beginner", rate: 0.9, voice: "", autoSpeak: true, showPy: true, showEn: true, handsFree: true, v2: true, v4: true, brain: "gemini", localSize: "standard", geminiKey: "", geminiModel: "" },
+  settings: { apiKey: "", model: "claude-opus-5", level: "beginner", rate: 0.9, voice: "", autoSpeak: true, showPy: true, showEn: true, handsFree: true, v2: true, v4: true, brain: "gemini", localSize: "standard", geminiKey: "", geminiModel: "", germanLevel: "medium" },
   days: [],
   minutes: {},
   history: [],
@@ -203,6 +204,11 @@ function loadVoices() {
 function currentVoice() {
   return voices.find((v) => v.voiceURI === db.settings.voice) || voices[0] || null;
 }
+function germanVoice() {
+  const all = speechSynthesis.getVoices().filter((x) => /^de[-_]/i.test(x.lang));
+  const score = (v) => (/^de[-_]DE/i.test(v.lang) ? 2 : 0) + (v.localService ? 1 : 0) + (/female|anna|helena|katja|vicki/i.test(v.name) ? 0.5 : 0);
+  return all.sort((a, b) => score(b) - score(a))[0] || null;
+}
 function englishVoice() {
   const all = speechSynthesis.getVoices().filter((x) => /^en[-_]/i.test(x.lang));
   const score = (v) => (/^en[-_](US|GB)/i.test(v.lang) ? 2 : 0) + (v.localService ? 1 : 0) + (/female|samantha|zira|aria/i.test(v.name) ? 0.5 : 0);
@@ -219,7 +225,7 @@ let lastSpeakEnd = 0;
 // How fast this phone's voices talk (characters per second at rate 1), measured from real sentences.
 // Used to know when a sentence is over when Chrome doesn't say so.
 const SPEED_KEY = "shuoba:speechSpeed";
-let speechSpeed = { zh: 4, en: 14 };
+let speechSpeed = { zh: 4, en: 14, de: 13 };
 try { speechSpeed = { ...speechSpeed, ...JSON.parse(localStorage.getItem(SPEED_KEY) || "{}") }; } catch { /* ignore */ }
 function learnSpeed(k, chars, ms, rate) {
   if (chars < 4 || ms < 400) return;
@@ -241,13 +247,16 @@ function speak(text, rate = db.settings.rate, lang = "zh-CN", opts = {}) {
     if (lang === "zh-CN") {
       const v = currentVoice();
       if (v) u.voice = v;
+    } else if (lang === "de-DE") {
+      const v = germanVoice();
+      if (v) u.voice = v;
     } else {
       const v = englishVoice();
       if (v) u.voice = v;
     }
     const wasState = avatarState;
     setAvatar("speaking");
-    const k = lang === "zh-CN" ? "zh" : "en";
+    const k = lang === "zh-CN" ? "zh" : lang === "de-DE" ? "de" : "en";
     // How long this sentence should take on this phone.
     const expected = ((text.length / speechSpeed[k]) * 1000) / Math.max(0.4, rate);
     let finished = false;
@@ -384,7 +393,10 @@ function listen(lang = "zh-CN") {
   $("#mic-en").classList.toggle("on", lang !== "zh-CN");
   const target = isCoach() ? db.session.target : null;
   if (isCoach() && quietRounds === 0 && lastSpeakEnd) dlog(`listening [${lang}] ${Date.now() - lastSpeakEnd} ms after she stopped talking`);
-  if (isCoach()) {
+  if (isGerman()) {
+    setAvatar("listening", "Ich höre zu…");
+    setStatus("Sprich einfach — Lena hört zu", "");
+  } else if (isCoach()) {
     setAvatar("listening", lang === "zh-CN" ? "Listening… 请说中文" : "Listening…");
     setStatus(lang === "zh-CN" ? (target ? "Your turn — say it in Chinese" : "Listening… 请说中文") : "Listening… just talk (English)", "");
     if (lang === "zh-CN" && target) setCaption(target);
@@ -421,7 +433,7 @@ function listen(lang = "zh-CN") {
         // learner is probably mid-sentence, so give them a little more time.
         endSoon(heard === want ? 150 : heard.length >= want.length ? 700 : 1400);
       } else {
-        endSoon(lang === "zh-CN" ? 900 : 900);
+        endSoon(lang === "de-DE" ? 1000 : 900);
       }
     }
     setStatus(finalText + interim || "Listening…", "live");
@@ -884,13 +896,22 @@ function openTalk() {
   show("talk");
   renderChat();
   const coach = isCoach();
+  const german = isGerman();
+  if (german) {
+    $("#talk-zh").textContent = "Deutsch";
+    $("#talk-en").textContent = `mit Lena · ${{ easy: "Leicht", medium: "Mittel", difficult: "Schwer" }[s.level] || "Mittel"}`;
+  }
+  document.querySelector(".stage .lili").classList.toggle("lena", german);
+  document.querySelector(".tutor-name").firstChild.textContent = german ? "Lena " : "Bīng ";
+  document.querySelector(".tutor-name span").textContent = german ? "Berlin" : "冰冰";
+  document.querySelector(".talk-toggles").hidden = german;
   $("#t-hands").closest("label").hidden = coach;
   document.body.classList.toggle("coach-mode", coach);
   $("#mic-en").querySelector("span:last-child").textContent = coach ? "Speak English" : "Answer in English";
   if (coach) {
     setCaption(s.target || null);
     setAvatar("idle", "Your speaking partner");
-    setStatus("Just talk — Bīng listens by herself. Say “pause” to take a break.", "");
+    setStatus(german ? "Sprich einfach — Lena hört von selbst zu. Sag „Pause“ für eine Pause." : "Just talk — Bīng listens by herself. Say “pause” to take a break.", "");
     return;
   }
   const last = lastTutor(s);
@@ -993,7 +1014,10 @@ async function tutorTurn(userMsg, schema, isStart) {
 // Voice-first and hands-free: you talk in English, ask how to say something, Bīng says it in
 // Chinese, then listens for your try and helps until it's right. She decides whether to listen
 // for English or Chinese next.
-const isCoach = () => db.session?.mode === "coach";
+const isGerman = () => db.session?.mode === "german";
+// Both hands-free conversations (Bīng in Chinese, Lena in German) share the same engine.
+const isCoach = () => db.session?.mode === "coach" || isGerman();
+const tutorName = () => (isGerman() ? "Lena" : "Bīng");
 let coachPaused = false;
 let playGen = 0; // bumped to interrupt Bīng while she is talking
 
@@ -1048,13 +1072,18 @@ function asLines(content) {
   ].join("\n");
 }
 function applyCoachLine(acc, line, onSeg) {
-  const m = line.replace(/^[\s*\-•>]+/, "").match(/^(RESULT|TARGET|EN|ZH|LISTEN|PAUSE)\s*[:：]\s*(.*)$/i);
+  const m = line.replace(/^[\s*\-•>]+/, "").match(/^(RESULT|TARGET|EN|ZH|DE|FIX|LISTEN|PAUSE)\s*[:：]\s*(.*)$/i);
   if (!m) return;
   const key = m[1].toUpperCase();
   const val = m[2].trim();
-  if (key === "EN" || key === "ZH") {
+  if (key === "FIX") {
+    const [better, note = ""] = val.split("|").map((x) => x.trim());
+    acc.fix = better && !/^(none|keine?)$/i.test(better) ? { better, note } : null;
+    return;
+  }
+  if (key === "EN" || key === "ZH" || key === "DE") {
     if (!val) return;
-    const seg = { lang: key === "ZH" ? "zh" : "en", text: val };
+    const seg = { lang: key.toLowerCase(), text: val };
     acc.say.push(seg);
     onSeg?.(seg, acc);
   } else if (key === "RESULT") acc.result = val.toLowerCase();
@@ -1092,7 +1121,91 @@ const COACH_EX = {
   pause: false,
 };
 
+const GERMAN_LEVELS = {
+  easy: "Leicht (A2–B1): very short, simple sentences, everyday words, mostly present and perfect tense. Explain any harder word right away in simple German.",
+  medium: "Mittel (B1–B2): natural everyday German at a normal pace, some subordinate clauses and common idioms.",
+  difficult: "Schwer (C1): natural, fluent, idiomatic German like a well-informed native speaker, with richer vocabulary, nuance and opinions.",
+};
+const GERMAN_RATE = { easy: 0.85, medium: 0.95, difficult: 1.05 };
+
+function germanRules(level) {
+  return `You are Lena, a warm, curious and well-informed conversation partner from Berlin. You talk with one learner by voice so they can practise spoken German.
+Learner level: ${GERMAN_LEVELS[level] || GERMAN_LEVELS.medium}
+- Speak only German. Every DE line is read aloud by a German voice: natural spoken sentences only — no lists, markdown, emoji, URLs or source names.
+- Talk about whatever the learner wants: politics, culture, football, travel, news, work, everyday life. Share facts and opinions, ask follow-up questions, keep the conversation going. Each answer is 1–3 short sentences (on the easy level very short) and ends with a question or an invitation to answer.
+- When the topic needs current or specific facts (news, results, dates, people, prices), use Google Search and weave what you found naturally into the conversation. Say so if you're not sure.
+- The learner's words ([de]) come from phone speech recognition: ignore obvious recognition glitches. If they made a real grammar or word mistake, give a FIX line with the corrected version of their sentence and a very short explanation in simple German — at most one per turn, only real mistakes. Otherwise FIX: none.
+- If the learner is stuck or asks what a word means, explain it simply in German (on the easy level you may add the English word).
+- If the learner wants to stop or take a break ("Pause", "Stopp", "Tschüss", "pause"), say a short goodbye and set PAUSE: yes.
+Reply in exactly this line format and nothing else:
+FIX: <corrected sentence> | <short explanation>   (or FIX: none)
+DE: <one spoken sentence>
+DE: <…more, one sentence per line…>
+PAUSE: no|yes`;
+}
+const GERMAN_SCHEMA = {
+  type: "object", additionalProperties: false, required: ["fix", "say", "pause"],
+  properties: {
+    fix: {
+      type: "object", additionalProperties: false, required: ["better", "note"],
+      properties: { better: { type: "string" }, note: { type: "string" } },
+    },
+    say: { type: "array", items: { type: "string" } },
+    pause: { type: "boolean" },
+  },
+};
+
+async function askGerman(messages, level, onSeg) {
+  const acc = { say: [], fix: null, target: null, result: "none", next_listen: "de", pause: false };
+  let raw;
+  let streamed = false;
+  if (db.settings.brain === "claude") {
+    const res = await askClaude({
+      system: germanRules(level).replace(/Reply in exactly this line format[\s\S]*$/, 'Reply ONLY with JSON: {"fix":{"better":"","note":""},"say":["…"],"pause":false}. Use empty strings in fix when there is nothing to correct.'),
+      messages,
+      schema: GERMAN_SCHEMA,
+    });
+    const d = res.data || {};
+    acc.say = (d.say || []).filter((t) => typeof t === "string" && t.trim()).map((t) => ({ lang: "de", text: t.trim() }));
+    acc.fix = d.fix?.better ? { better: d.fix.better, note: d.fix.note || "" } : null;
+    acc.pause = d.pause === true;
+    raw = res.raw;
+  } else {
+    // Google (the free option) — also for anyone on the on-phone AI, which can't do this.
+    if (!db.settings.geminiKey) throw { code: "no_gkey" };
+    let buf = "";
+    raw = await streamGemini({
+      key: db.settings.geminiKey,
+      model: db.settings.geminiModel,
+      system: germanRules(level),
+      messages,
+      search: true,
+      onModel: (m) => { db.settings.geminiModel = m; save(); },
+      onBusy: (t) => { setAvatar("thinking", "Google ist beschäftigt…"); setStatus(t, ""); },
+      onDelta: (t) => {
+        buf += t;
+        let i;
+        while ((i = buf.indexOf("\n")) >= 0) {
+          applyCoachLine(acc, buf.slice(0, i), onSeg);
+          buf = buf.slice(i + 1);
+        }
+      },
+    });
+    if (buf.trim()) applyCoachLine(acc, buf, onSeg);
+    streamed = true;
+    if (!acc.say.length) {
+      // No line format: speak the plain text sentence by sentence.
+      const plain = raw.replace(/^\s*(FIX|PAUSE)\s*:.*$/gim, "").trim();
+      acc.say = plain.split(/(?<=[.!?])\s+/).filter(Boolean).map((t) => ({ lang: "de", text: t.replace(/^DE\s*:\s*/i, "") }));
+      streamed = false;
+    }
+  }
+  if (!acc.say.length) throw { code: "bad_json", message: String(raw).slice(0, 120) };
+  return { data: acc, raw, streamed };
+}
+
 async function askCoach(messages, level, onSeg) {
+  if (isGerman()) return askGerman(messages, level, onSeg);
   const system = coachRules(level);
   let res;
   let streamed = false;
@@ -1186,6 +1299,40 @@ async function attemptCheck(heard, target) {
   return { score, ops, text: `Check: ${Math.round(score * 100)}% of characters matched. ${notes.slice(0, 5).join("; ")}.` };
 }
 
+const LENA_HELLO = {
+  easy: "Hallo! Ich bin Lena. Worüber möchtest du heute sprechen?",
+  medium: "Hallo, ich bin Lena! Worüber möchtest du heute sprechen? Politik, Kultur, Fußball — du entscheidest.",
+  difficult: "Hallo, ich bin Lena. Schön, dass du da bist! Worüber wollen wir heute reden — Politik, Kultur, Fußball oder etwas ganz anderes?",
+};
+async function startGerman() {
+  if (db.settings.brain !== "claude" && !db.settings.geminiKey) {
+    db.settings.brain = "gemini";
+    save();
+    goHome();
+    $("#key-card").hidden = false;
+    $("#key-card").scrollIntoView({ behavior: "smooth", block: "center" });
+    return;
+  }
+  keepScreenOn(true);
+  const level = db.settings.germanLevel || "medium";
+  const hello = { say: [{ lang: "de", text: LENA_HELLO[level] }], target: null, result: "none", next_listen: "de", pause: false };
+  db.session = {
+    mode: "german", topicId: "german", level, startedAt: Date.now(),
+    items: [{ kind: "coach", ...hello }],
+    api: [
+      { role: "user", content: "[start] Der Lerner hat die App geöffnet." },
+      { role: "assistant", content: `FIX: none\nDE: ${LENA_HELLO[level]}\nPAUSE: no` },
+    ],
+    target: null, nextListen: "de", done: false,
+  };
+  save();
+  coachPaused = false;
+  quietRounds = 0;
+  openTalk();
+  await playCoach(hello);
+  autoListen();
+}
+
 async function startCoach() {
   keepScreenOn(true);
   db.session = {
@@ -1212,6 +1359,12 @@ async function coachHeard(text, lang, typed = false) {
   if (busy) { dlog("heard while busy: ignored"); return; }
   setStatus("Thinking…", "");
   let content, via, check = null;
+  if (isGerman()) {
+    s.items.push({ kind: "me", text, via: typed ? "typed" : "spoken-de" });
+    save();
+    renderChat();
+    return coachTurn({ role: "user", content: `[${typed ? "typed" : "de"}] ${text}` });
+  }
   if (lang === "zh-CN" && s.target?.zh) {
     try {
       check = await attemptCheck(text, s.target.zh);
@@ -1315,7 +1468,7 @@ async function coachTurn(userMsg) {
   setStatus("Thinking…", "");
   setAvatar("thinking");
   const thinking = el("div", "msg tutor");
-  thinking.append(el("div", "who", "Bīng"), el("div", "bubble thinking", "…"));
+  thinking.append(el("div", "who", tutorName()), el("div", "bubble thinking", "…"));
   chat.append(thinking);
   thinking.scrollIntoView({ behavior: "smooth", block: "end" });
 
@@ -1331,14 +1484,14 @@ async function coachTurn(userMsg) {
       if (started) return;
       started = true;
       mic.classList.add("speaking");
-      setStatus("Bīng is talking…", "");
+      setStatus(isGerman() ? "Lena spricht…" : "Bīng is talking…", "");
     };
     // If Google takes a moment, acknowledge right away so the pause doesn't feel dead.
     const filler = setTimeout(() => {
       if (!started && my === playGen && !coachPaused) {
         dlog("slow answer: saying a filler");
         begin();
-        q.push({ lang: "en", text: pick(["Okay.", "Mm-hm.", "Let me see."]) });
+        q.push(isGerman() ? { lang: "de", text: pick(["Mhm.", "Okay.", "Moment."]) } : { lang: "en", text: pick(["Okay.", "Mm-hm.", "Let me see."]) });
       }
     }, 900);
     const onSeg = (seg, acc) => {
@@ -1358,6 +1511,7 @@ async function coachTurn(userMsg) {
     s.api.push(userMsg, { role: "assistant", content: raw });
     const me = [...s.items].reverse().find((i) => i.kind === "me");
     if (me && me.via === "attempt") me.result = data.result === "none" ? null : data.result;
+    if (me && isGerman() && data.fix) me.fix = data.fix;
     if ((data.target?.zh || "") !== (s.target?.zh || "")) s.tries = 0;
     s.target = data.target;
     s.nextListen = data.next_listen;
@@ -1396,6 +1550,12 @@ async function coachTurn(userMsg) {
 
 // Read her answer aloud, piece by piece: English in an English voice, Chinese in a Chinese voice.
 async function speakSeg(seg, data) {
+  if (seg.lang === "de") {
+    setCaption({ help: seg.text });
+    const lvl = db.session?.level;
+    await speak(seg.text, GERMAN_RATE[lvl] || 0.95, "de-DE", { queue: true });
+    return;
+  }
   const slow = data.result === "close" || data.result === "retry";
   if (seg.lang === "zh") {
     if (!seg.pinyin) {
@@ -1431,7 +1591,7 @@ function speechQueue(my, getData) {
 async function playCoach(data) {
   const my = ++playGen;
   mic.classList.add("speaking");
-  setStatus("Bīng is talking…", "");
+  setStatus(isGerman() ? "Lena spricht…" : "Bīng is talking…", "");
   for (const seg of data.say || []) {
     if ($("#talk").hidden || coachPaused || my !== playGen) break;
     await speakSeg(seg, data);
@@ -1444,7 +1604,7 @@ async function playCoach(data) {
 function autoListen() {
   const s = db.session;
   if (!isCoach() || coachPaused || busy || $("#talk").hidden) return;
-  listen(s.nextListen === "zh" && s.target ? "zh-CN" : "en-US");
+  listen(isGerman() ? "de-DE" : s.nextListen === "zh" && s.target ? "zh-CN" : "en-US");
 }
 
 let wakeLock = null;
@@ -1490,8 +1650,8 @@ function pauseCoach() {
   mic.classList.remove("speaking");
   coachPaused = true;
   quietRounds = 0;
-  setAvatar("idle", "Paused");
-  setStatus("Paused — tap Bīng to continue", "");
+  setAvatar("idle", isGerman() ? "Pause" : "Paused");
+  setStatus(isGerman() ? "Pause — tippe auf Lena, um weiterzumachen" : "Paused — tap Bīng to continue", "");
 }
 function resumeCoach(lang) {
   keepScreenOn(true);
@@ -1500,7 +1660,7 @@ function resumeCoach(lang) {
   coachPaused = false;
   quietRounds = 0;
   const s = db.session;
-  listen(lang || (s.nextListen === "zh" && s.target ? "zh-CN" : "en-US"));
+  listen(lang || (isGerman() ? "de-DE" : s.nextListen === "zh" && s.target ? "zh-CN" : "en-US"));
 }
 
 function renderChat() {
@@ -1511,7 +1671,7 @@ function renderChat() {
   for (const item of s.items) {
     if (item.kind === "coach") {
       const w = el("div", "msg tutor");
-      w.append(el("div", "who", "Bīng"));
+      w.append(el("div", "who", tutorName()));
       const b = el("div", "bubble coach");
       for (const seg of item.say || []) {
         if (seg.lang === "zh") {
@@ -1567,7 +1727,13 @@ function renderChat() {
       const w = el("div", "msg me");
       w.append(el("div", "who", "You"));
       w.append(el("div", [...item.text].some(isHan) ? "bubble" : "bubble latin", item.text));
-      w.append(el("div", "via", { spoken: "spoken", "spoken-en": "said in English", typed: "typed", attempt: "your try" }[item.via] || ""));
+      w.append(el("div", "via", { spoken: "spoken", "spoken-en": "said in English", "spoken-de": "gesprochen", typed: "typed", attempt: "your try" }[item.via] || ""));
+      if (item.fix) {
+        const card = el("div", "fb fix");
+        card.append(el("div", "tag", "Besser so"), el("div", "de-fix", item.fix.better));
+        if (item.fix.note) card.append(el("div", "note", item.fix.note));
+        w.append(card);
+      }
       if (item.result) {
         const label = { good: "Sounds right!", close: "Almost", retry: "Try again" }[item.result];
         if (label) w.append(el("div", `verdict ${item.result}`, label));
@@ -1609,6 +1775,13 @@ async function finish() {
   speechSynthesis?.cancel();
   const spoken = s.items.filter((i) => i.kind === "me");
   const topic = topicById(s.topicId);
+  if (isGerman()) {
+    if (spoken.length) markPracticed(0);
+    db.session = null;
+    save();
+    goHome();
+    return;
+  }
   if (!spoken.length) {
     db.session = null; save(); goHome();
     return;
@@ -2001,6 +2174,15 @@ function talkToLili() {
   startCoach();
 }
 $("#hero-lili").onclick = talkToLili;
+$("#lena-talk").onclick = () => startGerman();
+$("#lena-avatar").onclick = () => startGerman();
+function renderGermanLevel() {
+  document.querySelectorAll("#lena-level button").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.level === (db.settings.germanLevel || "medium"))));
+}
+document.querySelectorAll("#lena-level button").forEach((b) => {
+  b.onclick = () => { db.settings.germanLevel = b.dataset.level; save(); renderGermanLevel(); };
+});
+renderGermanLevel();
 $("#hero-talk").onclick = talkToLili;
 
 // ---------------------------------------------------------------- install on phone
