@@ -1,6 +1,6 @@
 // Caches the app shell so Shuō ba opens instantly and installs as an app.
 // API calls to Anthropic are never cached.
-const CACHE = "shuoba-v1";
+const CACHE = "shuoba-v2";
 const SHELL = [
   "./",
   "index.html",

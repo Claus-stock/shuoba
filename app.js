@@ -80,7 +80,7 @@ const LEVELS = {
 // ---------------------------------------------------------------- storage
 const KEY = "shuoba:v1";
 const defaults = {
-  settings: { apiKey: "", model: "claude-opus-5", level: "beginner", rate: 0.9, voice: "", autoSpeak: true, showPy: true, showEn: true, handsFree: false },
+  settings: { apiKey: "", model: "claude-opus-5", level: "beginner", rate: 0.9, voice: "", autoSpeak: true, showPy: true, showEn: true, handsFree: true, v2: true },
   days: [],
   minutes: {},
   history: [],
@@ -91,7 +91,10 @@ function load() {
   try {
     const raw = JSON.parse(localStorage.getItem(KEY) || "null");
     if (!raw) return structuredClone(defaults);
-    return { ...structuredClone(defaults), ...raw, settings: { ...defaults.settings, ...raw.settings } };
+    const settings = { ...defaults.settings, ...raw.settings };
+    // v2: hands-free became the default, so you can just talk.
+    if (!raw.settings?.v2) { settings.handsFree = true; settings.v2 = true; }
+    return { ...structuredClone(defaults), ...raw, settings };
   } catch {
     return structuredClone(defaults);
   }
@@ -313,7 +316,7 @@ function listen(lang = "zh-CN") {
     const msg = {
       "not-allowed": "Microphone is blocked. Allow it for this app in your phone's settings.",
       "service-not-allowed": "Microphone is blocked. Allow it for this app in your phone's settings.",
-      "no-speech": "I didn't hear anything. Tap the mic and try again.",
+      "no-speech": "I didn't hear you. Tap the mic when you're ready.",
       network: "Speech recognition needs an internet connection.",
       "audio-capture": "No microphone found.",
     }[e.error];
@@ -976,13 +979,26 @@ const GREETINGS = [
   { zh: "加油！每天说一点。", pinyin: "Jiā yóu! Měi tiān shuō yī diǎn.", en: "You can do it! Speak a little every day." },
 ];
 let greetIdx = 0;
-$("#hero-lili").onclick = async () => {
+async function greet() {
   const g = GREETINGS[greetIdx++ % GREETINGS.length];
   $("#hero-zh").textContent = g.zh;
   $("#hero-py").textContent = g.pinyin;
   $("#hero-en").textContent = g.en;
   await speak(g.zh);
-};
+}
+// Tap Lìlì (or "Talk to Lìlì") and a free conversation starts right away, hands-free.
+function talkToLili() {
+  if (!db.settings.apiKey) {
+    greet();
+    $("#hero-en").textContent = "To talk with me, paste your Anthropic API key below first.";
+    $("#key-card").hidden = false;
+    $("#key-card").scrollIntoView({ behavior: "smooth", block: "center" });
+    return;
+  }
+  startSession("free");
+}
+$("#hero-lili").onclick = talkToLili;
+$("#hero-talk").onclick = talkToLili;
 
 // ---------------------------------------------------------------- install on phone
 // When the app runs on this PC (localhost), the phone reaches it over Wi-Fi at this address.

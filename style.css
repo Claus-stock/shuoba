@@ -380,3 +380,4 @@ dialog::backdrop { background: rgba(10, 20, 16, .45); }
   position: absolute; top: 8px; right: 10px; border: 0; background: none; font-size: 22px; line-height: 1;
   color: var(--muted); cursor: pointer; padding: 4px 8px;
 }
+.talk-btn { align-self: flex-start; margin-top: 8px; }
