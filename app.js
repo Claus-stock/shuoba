@@ -1,5 +1,5 @@
 import Anthropic from "https://cdn.jsdelivr.net/npm/@anthropic-ai/sdk/+esm";
-import { LOCAL_MODELS, loadLocal, localChat, localReady, addPinyin, resetLocal, isEngineBroken } from "./local-ai.js";
+import { LOCAL_MODELS, loadLocal, localChat, localReady, addPinyin, pinyinArray, resetLocal, isEngineBroken } from "./local-ai.js";
 import { askGemini } from "./gemini.js";
 
 /* =========================================================================
@@ -59,6 +59,7 @@ const TOPICS = [
   { id: "birthday", cat: "social", zh: "生日聚会", en: "At a birthday party", role: "a guest at a friend's birthday party" },
   { id: "cinema", cat: "social", zh: "看电影", en: "Going to the movies", role: "a friend deciding which film to see" },
   { id: "free", cat: "social", zh: "随便聊聊", en: "Free chat", role: "a warm, curious friend chatting about everyday life" },
+  { id: "coach", cat: "coach", zh: "和丽丽聊天", en: "Talk with Lìlì", role: "your speaking coach" },
   // Business
   { id: "work", cat: "business", zh: "自我介绍", en: "Introducing yourself at work", role: "a new colleague on your first day at a company in Shanghai" },
   { id: "networking", cat: "business", zh: "交换名片", en: "Networking & business cards", role: "a sales director you meet at an industry event, exchanging business cards" },
@@ -125,7 +126,7 @@ function streak() {
 function todaysTopic() {
   const start = new Date(2026, 0, 1);
   const idx = Math.floor((new Date().setHours(12) - start.setHours(12)) / 86400000);
-  const pool = TOPICS.filter((t) => t.id !== "free");
+  const pool = TOPICS.filter((t) => t.id !== "free" && t.cat !== "coach");
   return pool[((idx % pool.length) + pool.length) % pool.length];
 }
 function markPracticed(minutes) {
@@ -289,6 +290,9 @@ function audioRow(text) {
 const Recognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 let rec = null;
 let listening = false;
+let userStopped = false;
+let quietRounds = 0;
+let switchTo = null; // listen again in this language as soon as the current listening has ended
 function listen(lang = "zh-CN") {
   if (!Recognition) {
     setStatus("This browser can't listen. Use Chrome on Android, or tap Type.", "err");
@@ -302,12 +306,21 @@ function listen(lang = "zh-CN") {
   rec.continuous = false;
   rec.maxAlternatives = 1;
   let finalText = "";
+  let errorKind = "";
   const started = Date.now();
   listening = true;
+  userStopped = false;
   mic.classList.add("listening");
   $("#mic-en").classList.toggle("on", lang !== "zh-CN");
-  setAvatar("listening", lang === "zh-CN" ? "Listening… 请说中文" : "Listening… tell me in English");
-  setStatus(lang === "zh-CN" ? "Listening… 请说中文" : "Listening… say it in English and I'll help", "");
+  const target = isCoach() ? db.session.target : null;
+  if (isCoach()) {
+    setAvatar("listening", lang === "zh-CN" ? "Listening… 请说中文" : "Listening…");
+    setStatus(lang === "zh-CN" ? (target ? "Your turn — say it in Chinese" : "Listening… 请说中文") : "Listening… just talk (English)", "");
+    if (lang === "zh-CN" && target) setCaption(target);
+  } else {
+    setAvatar("listening", lang === "zh-CN" ? "Listening… 请说中文" : "Listening… tell me in English");
+    setStatus(lang === "zh-CN" ? "Listening… 请说中文" : "Listening… say it in English and I'll help", "");
+  }
 
   rec.onresult = (e) => {
     let interim = "";
@@ -319,6 +332,8 @@ function listen(lang = "zh-CN") {
     setStatus(finalText + interim || "Listening…", "live");
   };
   rec.onerror = (e) => {
+    errorKind = e.error;
+    if (isCoach() && (e.error === "no-speech" || e.error === "aborted")) return; // handled in onend
     const msg = {
       "not-allowed": "Microphone is blocked. Allow it for this app in your phone's settings.",
       "service-not-allowed": "Microphone is blocked. Allow it for this app in your phone's settings.",
@@ -333,17 +348,36 @@ function listen(lang = "zh-CN") {
     mic.classList.remove("listening");
     $("#mic-en").classList.remove("on");
     if (avatarState === "listening") setAvatar("idle");
+    if (switchTo) {
+      const next = switchTo;
+      switchTo = null;
+      coachPaused = false;
+      quietRounds = 0;
+      listen(next);
+      return;
+    }
     const text = finalText.trim();
     if (text) {
+      quietRounds = 0;
       markPracticed((Date.now() - started) / 60000);
-      sendLearner(text, lang === "zh-CN" ? "spoken" : "spoken-en");
+      if (isCoach()) coachHeard(text, lang);
+      else sendLearner(text, lang === "zh-CN" ? "spoken" : "spoken-en");
+    } else if (isCoach()) {
+      // Silence: keep listening a few rounds, then pause so the phone doesn't listen forever.
+      const quiet = !errorKind || errorKind === "no-speech";
+      if (!userStopped && quiet && !coachPaused && quietRounds < 3 && !$("#talk").hidden) {
+        quietRounds++;
+        setTimeout(() => listen(lang), 250);
+      } else if (!$("#status").classList.contains("err")) {
+        pauseCoach();
+      }
     } else if (!$("#status").classList.contains("err")) {
       setStatus("Tap the mic and answer in Chinese", "");
     }
   };
   rec.start();
 }
-function stopListening() { try { rec?.stop(); } catch { /* already stopped */ } }
+function stopListening() { userStopped = true; try { rec?.stop(); } catch { /* already stopped */ } }
 
 // ---------------------------------------------------------------- Claude
 const LINE = {
@@ -734,6 +768,15 @@ function openTalk() {
   applyToggles();
   show("talk");
   renderChat();
+  const coach = isCoach();
+  $("#t-hands").closest("label").hidden = coach;
+  $("#mic-en").querySelector("span:last-child").textContent = coach ? "Speak English" : "Answer in English";
+  if (coach) {
+    setCaption(s.target || null);
+    setAvatar("idle", "Your speaking partner");
+    setStatus("Just talk — Lìlì listens by herself", "");
+    return;
+  }
   const last = lastTutor(s);
   setCaption(last ? last.reply : null);
   setAvatar("idle", "Your speaking partner");
@@ -743,6 +786,7 @@ function openTalk() {
 async function sendLearner(text, via) {
   const s = db.session;
   if (!s || busy) return;
+  if (isCoach()) return coachHeard(text, [...text].some(isHan) ? "zh-CN" : "en-US", true);
   s.items.push({ kind: "me", text, via });
   save();
   renderChat();
@@ -829,12 +873,278 @@ async function tutorTurn(userMsg, schema, isStart) {
   }
 }
 
+// ---------------------------------------------------------------- coach: talk freely with Lìlì
+// Voice-first and hands-free: you talk in English, ask how to say something, Lìlì says it in
+// Chinese, then listens for your try and helps until it's right. She decides whether to listen
+// for English or Chinese next.
+const isCoach = () => db.session?.mode === "coach";
+let coachPaused = false;
+let playGen = 0; // bumped to interrupt Lìlì while she is talking
+
+const COACH_GREETING = {
+  say: [
+    { lang: "en", text: "Hi, I'm Lìlì! Just talk to me in English. Ask me how to say anything in Chinese, and I'll help you say it until it sounds right." },
+  ],
+  target: null,
+  result: "none",
+  next_listen: "en",
+};
+
+function coachRules(level) {
+  return `You are Lìlì (丽丽), a warm, patient Mandarin speaking coach from Beijing, talking with one learner by voice. Learner level: ${LEVELS[level]}.
+Everything in "say" is read aloud by text-to-speech, in order: "en" items with an English voice, "zh" items with a Chinese voice.
+
+How the conversation works:
+- The learner mostly speaks English. Chat naturally and warmly in English, briefly (1–3 short spoken sentences).
+- When they ask how to say something (or when a phrase would help), teach ONE short, natural, everyday Chinese phrase: set "target" to it (simplified characters + English meaning). In "say": a short English lead-in, then the Chinese phrase alone as a {"lang":"zh"} item, then ask them to repeat it. Set next_listen "zh".
+- Messages tagged [attempt] are the learner's Chinese try at the current target, as heard by phone speech recognition, with a character-by-character check. Judge it:
+  - "good": it matches (or only trivially differs). Praise briefly, then either ask what they'd like to learn next (next_listen "en") or offer a slightly longer variation as the new target (next_listen "zh").
+  - "close" or "retry": say exactly which word or tone was off, using the check (e.g. "杯 is first tone, high and flat"), say the phrase again as a {"lang":"zh"} item, and ask them to try again. Keep the same target; next_listen "zh".
+  - After 4 tries on the same phrase, be encouraging and move on (next_listen "en").
+- If an [attempt] is clearly English or a new question rather than a try, answer it as English speech.
+- [english] = English speech. [chinese] = Chinese speech with no target. [typed] = typed text.
+Rules: "zh" items contain only the Chinese phrase (no pinyin, no English). English items are short and spoken-style: no lists, no markdown, no pinyin, no emoji. "target" is the phrase being practised now, or {"zh":"","en":""} if none. Simplified characters only.
+Reply ONLY with JSON: {"say":[{"lang":"en","text":"..."},{"lang":"zh","text":"..."}],"target":{"zh":"...","en":"..."},"result":"none|good|close|retry","next_listen":"en|zh"}`;
+}
+
+const COACH_SCHEMA = {
+  type: "object", additionalProperties: false, required: ["say", "target", "result", "next_listen"],
+  properties: {
+    say: {
+      type: "array",
+      items: {
+        type: "object", additionalProperties: false, required: ["lang", "text"],
+        properties: { lang: { type: "string", enum: ["en", "zh"] }, text: { type: "string" } },
+      },
+    },
+    target: {
+      type: "object", additionalProperties: false, required: ["zh", "en"],
+      properties: { zh: { type: "string" }, en: { type: "string" } },
+    },
+    result: { type: "string", enum: ["none", "good", "close", "retry"] },
+    next_listen: { type: "string", enum: ["en", "zh"] },
+  },
+};
+const COACH_EX = {
+  say: [{ lang: "en", text: "<English>" }, { lang: "zh", text: "<Chinese phrase>" }],
+  target: { zh: "<Chinese phrase or empty>", en: "<meaning or empty>" },
+  result: "none | good | close | retry",
+  next_listen: "en | zh",
+};
+
+async function askCoach(messages, level) {
+  const system = coachRules(level);
+  let res;
+  if (db.settings.brain === "claude") {
+    res = await askClaude({ system, messages, schema: COACH_SCHEMA });
+  } else if (db.settings.brain === "gemini") {
+    res = await askGemini({
+      key: db.settings.geminiKey,
+      model: db.settings.geminiModel,
+      system,
+      messages,
+      onModel: (m) => { db.settings.geminiModel = m; save(); },
+      onBusy: (text) => { setAvatar("thinking", "Waiting for Google…"); setStatus(text, ""); },
+    });
+  } else {
+    await ensureLocal();
+    res = await localChat({ system, messages: messages.slice(-9), example: COACH_EX, maxTokens: 300 });
+  }
+  const d = res.data || {};
+  d.say = (Array.isArray(d.say) ? d.say : [])
+    .filter((x) => x && typeof x.text === "string" && x.text.trim() && !/^<.*>$/.test(x.text.trim()))
+    .map((x) => ({ lang: x.lang === "zh" || [...x.text].some(isHan) && !/[a-z]{3}/i.test(x.text) ? "zh" : "en", text: x.text.trim() }));
+  if (!d.say.length) throw { code: "bad_json", message: res.raw?.slice(0, 120) };
+  const tz = d.target && typeof d.target.zh === "string" ? d.target.zh.trim() : "";
+  d.target = tz && !/^<.*>$/.test(tz) ? { zh: tz, en: String(d.target.en || "").replace(/^<.*>$/, "") } : null;
+  d.result = ["good", "close", "retry"].includes(d.result) ? d.result : "none";
+  d.next_listen = d.next_listen === "zh" && d.target ? "zh" : "en";
+  // Pinyin from the dictionary, for the phrase and for every Chinese line she says.
+  const lines = d.say.filter((x) => x.lang === "zh").map((x) => ({ zh: x.text }));
+  await addPinyin({ lines, target: d.target });
+  d.say.filter((x) => x.lang === "zh").forEach((x, i) => (x.pinyin = lines[i].pinyin));
+  return { data: d, raw: res.raw };
+}
+
+// Compare what the phone heard with the phrase, character by character, with pinyin,
+// so Lìlì can say exactly which word or tone came out wrong.
+async function attemptCheck(heard, target) {
+  const H = [...heard].filter(isHan);
+  const T = [...target].filter(isHan);
+  if (!T.length) return { score: 0, text: "" };
+  if (H.join("") === T.join("")) return { score: 1, text: "Check: every character matches." };
+  const [hp, tp] = await Promise.all([pinyinArray(H.join("")), pinyinArray(T.join(""))]);
+  // Edit-distance alignment of target vs heard.
+  const n = T.length, m = H.length;
+  const D = Array.from({ length: n + 1 }, (_, i) => Array.from({ length: m + 1 }, (_, j) => (i === 0 ? j : j === 0 ? i : 0)));
+  for (let i = 1; i <= n; i++)
+    for (let j = 1; j <= m; j++)
+      D[i][j] = Math.min(D[i - 1][j] + 1, D[i][j - 1] + 1, D[i - 1][j - 1] + (T[i - 1] === H[j - 1] ? 0 : 1));
+  const notes = [];
+  let i = n, j = m, same = 0;
+  while (i > 0 || j > 0) {
+    if (i > 0 && j > 0 && D[i][j] === D[i - 1][j - 1] + (T[i - 1] === H[j - 1] ? 0 : 1)) {
+      if (T[i - 1] === H[j - 1]) same++;
+      else notes.unshift(`${T[i - 1]} (${tp[i - 1]}) was heard as ${H[j - 1]} (${hp[j - 1]})`);
+      i--; j--;
+    } else if (i > 0 && D[i][j] === D[i - 1][j] + 1) {
+      notes.unshift(`${T[i - 1]} (${tp[i - 1]}) was missing`);
+      i--;
+    } else {
+      notes.unshift(`extra ${H[j - 1]} (${hp[j - 1]})`);
+      j--;
+    }
+  }
+  const score = same / n;
+  return { score, text: `Check: ${Math.round(score * 100)}% of characters matched. ${notes.slice(0, 5).join("; ")}.` };
+}
+
+async function startCoach() {
+  db.session = {
+    mode: "coach", topicId: "coach", level: db.settings.level, startedAt: Date.now(),
+    items: [{ kind: "coach", ...COACH_GREETING }],
+    api: [
+      { role: "user", content: "[start] The learner just opened the app." },
+      { role: "assistant", content: JSON.stringify({ ...COACH_GREETING, target: { zh: "", en: "" } }) },
+    ],
+    target: null, nextListen: "en", done: false,
+  };
+  save();
+  coachPaused = false;
+  quietRounds = 0;
+  openTalk();
+  await playCoach(COACH_GREETING);
+  autoListen();
+}
+
+async function coachHeard(text, lang, typed = false) {
+  const s = db.session;
+  if (!s || busy) return;
+  let content, via, check = null;
+  if (lang === "zh-CN" && s.target?.zh) {
+    check = await attemptCheck(text, s.target.zh);
+    via = "attempt";
+    content = `[attempt] Target: ${s.target.zh}. Heard: ${text}. ${check.text}`;
+  } else if (typed) {
+    via = "typed";
+    content = `[typed] ${text}`;
+  } else if (lang === "zh-CN") {
+    via = "spoken";
+    content = `[chinese] ${text}`;
+  } else {
+    via = "spoken-en";
+    content = `[english] ${text}`;
+  }
+  s.items.push({ kind: "me", text, via, score: check?.score });
+  save();
+  renderChat();
+  await coachTurn({ role: "user", content });
+}
+
+async function coachTurn(userMsg) {
+  const s = db.session;
+  setBusy(true);
+  setStatus("Thinking…", "");
+  setAvatar("thinking");
+  const thinking = el("div", "msg tutor");
+  thinking.append(el("div", "who", "Lìlì"), el("div", "bubble thinking", "…"));
+  chat.append(thinking);
+  thinking.scrollIntoView({ behavior: "smooth", block: "end" });
+
+  const history = s.api.length > 40 ? [...s.api.slice(0, 2), ...s.api.slice(-30)] : s.api;
+  try {
+    const { data, raw } = await askCoach([...history, userMsg], s.level);
+    s.api.push(userMsg, { role: "assistant", content: raw });
+    const me = [...s.items].reverse().find((i) => i.kind === "me");
+    if (me && me.via === "attempt") me.result = data.result === "none" ? null : data.result;
+    s.target = data.target;
+    s.nextListen = data.next_listen;
+    s.items.push({ kind: "coach", say: data.say, target: data.target, result: data.result });
+    save();
+    thinking.remove();
+    renderChat();
+    chat.lastElementChild?.scrollIntoView({ behavior: "smooth", block: "start" });
+    setBusy(false);
+    await playCoach(data);
+    autoListen();
+  } catch (e) {
+    console.error(e);
+    thinking.remove();
+    setBusy(false);
+    coachPaused = true;
+    setAvatar("idle", "Hmm, something went wrong");
+    setStatus(errorMessage(e), "err");
+    showErrorDetails(e);
+    const retry = el("button", "btn primary", "Try again");
+    retry.onclick = () => { retry.remove(); coachPaused = false; coachTurn(userMsg); };
+    chat.append(retry);
+  }
+}
+
+// Read her answer aloud, piece by piece: English in an English voice, Chinese in a Chinese voice.
+async function playCoach(data) {
+  const my = ++playGen;
+  mic.classList.add("speaking");
+  const slow = data.result === "close" || data.result === "retry";
+  for (const seg of data.say || []) {
+    if ($("#talk").hidden || coachPaused || my !== playGen) break;
+    if (seg.lang === "zh") {
+      setCaption({ zh: seg.text, pinyin: seg.pinyin, en: data.target?.zh === seg.text ? data.target.en : "" });
+      await speak(seg.text, slow ? Math.max(0.5, db.settings.rate - 0.25) : Math.max(0.6, db.settings.rate - 0.1), "zh-CN");
+    } else {
+      setCaption({ help: seg.text });
+      await speak(seg.text, 1, "en-US");
+    }
+  }
+  if (my !== playGen) return; // interrupted: whoever interrupted decides what happens next
+  mic.classList.remove("speaking");
+  if (data.target) setCaption(data.target);
+}
+
+function autoListen() {
+  const s = db.session;
+  if (!isCoach() || coachPaused || busy || $("#talk").hidden) return;
+  listen(s.nextListen === "zh" && s.target ? "zh-CN" : "en-US");
+}
+
+function pauseCoach() {
+  playGen++;
+  mic.classList.remove("speaking");
+  coachPaused = true;
+  quietRounds = 0;
+  setAvatar("idle", "Paused");
+  setStatus("Paused — tap the mic when you want to talk again", "");
+}
+function resumeCoach(lang) {
+  playGen++;
+  mic.classList.remove("speaking");
+  coachPaused = false;
+  quietRounds = 0;
+  const s = db.session;
+  listen(lang || (s.nextListen === "zh" && s.target ? "zh-CN" : "en-US"));
+}
+
 function renderChat() {
   const s = db.session;
   chat.textContent = "";
   if (!s) return;
   const topic = topicById(s.topicId);
   for (const item of s.items) {
+    if (item.kind === "coach") {
+      const w = el("div", "msg tutor");
+      w.append(el("div", "who", "Lìlì"));
+      const b = el("div", "bubble coach");
+      for (const seg of item.say || []) {
+        if (seg.lang === "zh") {
+          const box = el("div", "say-zh");
+          box.append(lineBlock({ zh: seg.text, pinyin: seg.pinyin, en: item.target?.zh === seg.text ? item.target.en : "" }));
+          b.append(box);
+        } else b.append(el("p", "say-en", seg.text));
+      }
+      w.append(b);
+      chat.append(w);
+      continue;
+    }
     if (item.kind === "intro") {
       const box = el("div", "goal");
       box.append(el("div", "label", "Today's goal"), el("p", "", item.goal));
@@ -876,8 +1186,12 @@ function renderChat() {
     } else if (item.kind === "me") {
       const w = el("div", "msg me");
       w.append(el("div", "who", "You"));
-      w.append(el("div", "bubble", item.text));
-      w.append(el("div", "via", { spoken: "spoken", "spoken-en": "said in English", typed: "typed" }[item.via] || ""));
+      w.append(el("div", [...item.text].some(isHan) ? "bubble" : "bubble latin", item.text));
+      w.append(el("div", "via", { spoken: "spoken", "spoken-en": "said in English", typed: "typed", attempt: "your try" }[item.via] || ""));
+      if (item.result) {
+        const label = { good: "Sounds right!", close: "Almost", retry: "Try again" }[item.result];
+        if (label) w.append(el("div", `verdict ${item.result}`, label));
+      }
       const f = item.feedback;
       if (f) {
         const kind = f.verdict === "great" ? "great" : f.verdict === "small fix" ? "fix" : "try";
@@ -924,8 +1238,9 @@ async function finish() {
   body.append(el("div", "card thinking", "Putting together your summary…"));
 
   const transcript = s.items
-    .filter((i) => i.kind === "me" || i.kind === "tutor")
-    .map((i) => (i.kind === "me" ? `Learner (${i.via}): ${i.text}` : `Tutor: ${i.reply.zh}`))
+    .filter((i) => i.kind === "me" || i.kind === "tutor" || i.kind === "coach")
+    .map((i) => (i.kind === "me" ? `Learner (${i.via}): ${i.text}`
+      : i.kind === "coach" ? `Tutor: ${(i.say || []).map((x) => x.text).join(" ")}` : `Tutor: ${i.reply.zh}`))
     .join("\n");
   const entry = { date: dayKey(), topicId: s.topicId, turns: spoken.length, summary: null };
   try {
@@ -1074,7 +1389,7 @@ function renderTopics() {
   });
   const grid = $("#topics");
   grid.textContent = "";
-  TOPICS.filter((tp) => currentCat === "all" || tp.cat === currentCat).forEach((tp) => {
+  TOPICS.filter((tp) => tp.cat !== "coach" && (currentCat === "all" || tp.cat === currentCat)).forEach((tp) => {
     const b = el("button", "topic"); b.type = "button";
     if (currentCat === "all" && tp.cat === "business") b.append(el("span", "tag", "Business"));
     b.append(el("span", "zh", tp.zh), el("span", "en", tp.en));
@@ -1202,8 +1517,26 @@ function applyToggles() {
 }
 ["#t-py", "#t-en", "#t-hands"].forEach((s) => $(s).addEventListener("change", applyToggles));
 
-mic.onclick = () => (listening ? stopListening() : listen("zh-CN"));
-$("#mic-en").onclick = () => (listening ? stopListening() : listen("en-US"));
+mic.onclick = () => {
+  if (isCoach()) {
+    speechSynthesis?.cancel();
+    if (listening) { stopListening(); pauseCoach(); } else resumeCoach();
+    return;
+  }
+  listening ? stopListening() : listen("zh-CN");
+};
+$("#mic-en").onclick = () => {
+  if (isCoach()) {
+    // Switch to English right now, e.g. to ask something new while she waits for a Chinese try.
+    speechSynthesis?.cancel();
+    if (listening) {
+      switchTo = "en-US";
+      try { rec?.abort(); } catch { /* ignore */ }
+    } else resumeCoach("en-US");
+    return;
+  }
+  listening ? stopListening() : listen("en-US");
+};
 $("#kbd").onclick = () => {
   const f = $("#type-form");
   f.hidden = !f.hidden;
@@ -1221,7 +1554,10 @@ $("#finish").onclick = finish;
 $("#talk-back").onclick = goHome;
 $("#summary-back").onclick = goHome;
 $("#start-today").onclick = () => begin(todaysTopic().id);
-$("#resume").onclick = () => openTalk();
+$("#resume").onclick = () => {
+  openTalk();
+  if (isCoach()) resumeCoach();
+};
 
 // ---------------------------------------------------------------- home Lìlì
 const GREETINGS = [
@@ -1247,7 +1583,7 @@ function talkToLili() {
     $("#key-card").scrollIntoView({ behavior: "smooth", block: "center" });
     return;
   }
-  startSession("free");
+  startCoach();
 }
 $("#hero-lili").onclick = talkToLili;
 $("#hero-talk").onclick = talkToLili;

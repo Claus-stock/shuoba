@@ -103,6 +103,12 @@ export async function resetLocal() {
 }
 export const isEngineBroken = (e) => /disposed|device|lost|GPU|mapAsync|Instance reference|out of memory|OOM/i.test(String(e?.message || e));
 
+// Pinyin for each character of a Chinese string, e.g. "一杯" → ["yī", "bēi"] (tone changes like 一 → yì applied).
+export async function pinyinArray(zh) {
+  if (!pinyinFn) pinyinFn = (await import(PINYIN)).pinyin;
+  return pinyinFn(zh, { toneType: "symbol", type: "array" });
+}
+
 // Fill in pinyin for every Chinese line in a reply: {zh} → pinyin, better_zh → better_pinyin.
 export async function addPinyin(obj) {
   if (!pinyinFn) pinyinFn = (await import(PINYIN)).pinyin;

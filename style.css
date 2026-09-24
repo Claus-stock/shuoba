@@ -382,3 +382,13 @@ dialog::backdrop { background: rgba(10, 20, 16, .45); }
 }
 .talk-btn { align-self: flex-start; margin-top: 8px; }
 .details { font: 11px/1.4 ui-monospace, Consolas, monospace; color: var(--muted); margin-top: 6px; word-break: break-word; }
+
+/* ---------- coach ---------- */
+.bubble.coach { display: flex; flex-direction: column; gap: 8px; }
+.say-en { margin: 0; font-size: 16px; line-height: 1.45; }
+.say-zh { background: var(--accent-soft); border-radius: 12px; padding: 8px 10px; }
+.verdict { display: inline-block; margin-top: 4px; font-size: 12px; font-weight: 700; padding: 3px 10px; border-radius: 999px; }
+.verdict.good { background: var(--good); color: var(--ground); }
+.verdict.close { background: var(--fix); color: var(--ground); }
+.verdict.retry { background: var(--surface-2); color: var(--err); border: 1px solid var(--err); }
+.me .bubble.latin { font-family: var(--ui); font-size: 16px; }
