@@ -414,11 +414,12 @@ function listen(lang = "zh-CN") {
       // retries with a growing pause, then she pauses.
       const quiet = !errorKind || errorKind === "no-speech" || errorKind === "aborted";
       const canRetry = !userStopped && !coachPaused && !$("#talk").hidden && !document.hidden;
-      // Guard: if listening keeps ending instantly (mic broken), stop instead of looping forever.
+      // If listening keeps ending instantly, slow down (5 s between tries) instead of spinning.
       const instant = Date.now() - started < 1000;
-      if (canRetry && quiet && !(instant && quietRounds >= 5)) {
+      if (canRetry && quiet) {
         quietRounds = instant ? quietRounds + 1 : 0;
-        setTimeout(() => listen(lang), 250);
+        if (quietRounds === 5) dlog("listening ends instantly: slowing down");
+        setTimeout(() => listen(lang), quietRounds >= 5 ? 5000 : 250);
       } else if (canRetry && errorKind !== "not-allowed" && errorKind !== "service-not-allowed" && quietRounds < 3) {
         quietRounds++;
         setTimeout(() => listen(lang), 1500 * quietRounds);
