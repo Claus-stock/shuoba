@@ -10,28 +10,37 @@ const RETRY_DELAYS = [1500, 4000]; // after a busy/overloaded answer, wait and t
 // needs speed). If a model rejects a level, the next one is tried; what worked is remembered.
 const THINKING_LEVELS = ["minimal", "low", null];
 const thinkingFor = new Map();
+// Models Google has told us are gone (kept on the phone), so they are never tried again.
+const GONE_KEY = "shuoba:goneModels";
+let goneModels = new Set();
+try { goneModels = new Set(JSON.parse(localStorage.getItem(GONE_KEY) || "[]")); } catch { /* ignore */ }
+function markGone(m) {
+  goneModels.add(m);
+  try { localStorage.setItem(GONE_KEY, JSON.stringify([...goneModels])); } catch { /* ignore */ }
+}
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // One JSON answer. onModel(name): remember the model that worked. onBusy(text): tell the user we're retrying.
-export function askGemini({ key, model, system, messages, maxTokens = 1024, onModel, onBusy }) {
-  return withModels({ key, model, onModel, onBusy }, (m) => call(key, m, system, messages, maxTokens));
+export function askGemini({ key, model, system, messages, maxTokens = 1024, onModel, onBusy, onAttemptError }) {
+  return withModels({ key, model, onModel, onBusy, onAttemptError }, (m) => call(key, m, system, messages, maxTokens));
 }
 
 // A streamed plain-text answer: onDelta(text) gets each piece as soon as Google sends it, so speaking
 // can start before the whole answer exists. Resolves with the full text.
 // search: let the model look things up with Google Search (current news, results, facts).
-export function streamGemini({ key, model, system, messages, maxTokens = 1024, onModel, onBusy, onDelta, search = false }) {
-  return withModels({ key, model, onModel, onBusy }, (m) => streamCall(key, m, system, messages, maxTokens, onDelta, undefined, search));
+export function streamGemini({ key, model, system, messages, maxTokens = 1024, onModel, onBusy, onDelta, onAttemptError, search = false }) {
+  return withModels({ key, model, onModel, onBusy, onAttemptError }, (m) => streamCall(key, m, system, messages, maxTokens, onDelta, undefined, search, onAttemptError));
 }
 
 // Try the remembered model first. If it is busy, retry with a pause; if it is gone or stays busy,
 // ask Google which Flash models this key can use (newest first, Flash-Lite last) and work down the list.
-async function withModels({ key, model, onModel, onBusy }, attempt) {
+async function withModels({ key, model, onModel, onBusy, onAttemptError }, attempt) {
   if (!key) throw { code: "no_gkey" };
   let lastErr = null;
+  let realErr = null; // the most useful error: a "model is gone" error says little about what went wrong
   const tried = new Set();
-  let queue = model ? [model] : [];
+  let queue = model && !goneModels.has(model) ? [model] : [];
   let listed = false;
 
   while (true) {
@@ -39,7 +48,7 @@ async function withModels({ key, model, onModel, onBusy }, attempt) {
       if (listed) break;
       listed = true;
       const all = await flashModels(key);
-      queue = (all.length ? all : FALLBACK_MODELS).filter((x) => !tried.has(x));
+      queue = (all.length ? all : FALLBACK_MODELS).filter((x) => !tried.has(x) && !goneModels.has(x));
       if (!queue.length) break;
     }
     const m = queue.shift();
@@ -53,8 +62,10 @@ async function withModels({ key, model, onModel, onBusy }, attempt) {
         return res;
       } catch (e) {
         lastErr = { ...e, model: m };
+        onAttemptError?.(lastErr);
         if (e?.started) throw lastErr; // part of the answer was already used: don't start over
-        if (isModelGone(e)) break; // retired or not on this key: next model
+        if (isModelGone(e)) { markGone(m); break; } // retired or not on this key: next model
+        realErr = lastErr;
         if (!isBusy(e)) throw lastErr; // a real error (bad key, blocked, …): stop here
         if (i < delays.length) {
           onBusy?.("Google is busy — trying again…");
@@ -65,7 +76,7 @@ async function withModels({ key, model, onModel, onBusy }, attempt) {
       }
     }
   }
-  throw lastErr || { code: "gemini_http", status: 404, message: "No available Gemini model found." };
+  throw realErr || lastErr || { code: "gemini_http", status: 404, message: "No available Gemini model found." };
 }
 
 // 503 overloaded, 500/504 server hiccups and 429 per-model rate limits are all worth retrying.
@@ -143,15 +154,17 @@ async function call(key, model, system, messages, maxTokens, level = thinkingFor
   return { data, raw: text };
 }
 
-async function streamCall(key, model, system, messages, maxTokens, onDelta, level = thinkingFor.get(model) ?? 0, search = false) {
+async function streamCall(key, model, system, messages, maxTokens, onDelta, level = thinkingFor.get(model) ?? 0, search = false, onAttemptError) {
   const body = requestBody(model, system, messages, maxTokens, false, level, search);
   const r = await post(`${API}/models/${model}:streamGenerateContent?alt=sse`, key, body);
   if (!r.ok) {
     const err = await httpError(r);
-    if (thinkingRejected(err, body)) return streamCall(key, model, system, messages, maxTokens, onDelta, level + 1, search);
-    // Search not available for this model or key: answer without it rather than not at all.
-    if (search && err.status === 400 && /search|tool|grounding/i.test(err.message)) {
-      return streamCall(key, model, system, messages, maxTokens, onDelta, level, false);
+    if (thinkingRejected(err, body)) return streamCall(key, model, system, messages, maxTokens, onDelta, level + 1, search, onAttemptError);
+    // Search refused (free search quota used up, not allowed for this model or key): answer
+    // without searching rather than not at all.
+    if (search && ([400, 403, 429].includes(err.status) || /search|tool|grounding/i.test(err.message))) {
+      onAttemptError?.({ ...err, model, note: "retrying without web search" });
+      return streamCall(key, model, system, messages, maxTokens, onDelta, level, false, onAttemptError);
     }
     throw err;
   }

@@ -1180,6 +1180,7 @@ async function askGerman(messages, level, onSeg) {
       system: germanRules(level),
       messages,
       search: true,
+      onAttemptError: (e) => dlog(`Google ${e.model}: ${e.status || e.code} ${String(e.message || "").slice(0, 60)}${e.note ? ` → ${e.note}` : ""}`),
       onModel: (m) => { db.settings.geminiModel = m; save(); },
       onBusy: (t) => { setAvatar("thinking", "Google ist beschäftigt…"); setStatus(t, ""); },
       onDelta: (t) => {
@@ -1216,6 +1217,7 @@ async function askCoach(messages, level, onSeg) {
       key: db.settings.geminiKey,
       model: db.settings.geminiModel,
       system: coachRules(level, "lines"),
+      onAttemptError: (e) => dlog(`Google ${e.model}: ${e.status || e.code} ${String(e.message || "").slice(0, 60)}`),
       messages: messages.map((m) => (m.role === "assistant" ? { ...m, content: asLines(m.content) } : m)),
       onModel: (m) => { db.settings.geminiModel = m; save(); },
       onBusy: (t) => { setAvatar("thinking", "Waiting for Google…"); setStatus(t, ""); },
