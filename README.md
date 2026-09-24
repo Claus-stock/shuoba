@@ -1,18 +1,18 @@
 # Shuō ba 说吧
 
-Speak Mandarin every day with Lìlì (丽丽), an AI tutor avatar. You talk, she answers out loud and corrects you. Answer in English whenever you're stuck and she'll teach you how to say it in Chinese.
+Speak Mandarin every day with Bīng (冰冰), an AI tutor avatar. You talk, she answers out loud and corrects you. Answer in English whenever you're stuck and she'll teach you how to say it in Chinese.
 
 - Daily lesson plus about 40 scenarios in Everyday, Travel, Social and **Business**
 - Voice in (phone microphone, Mandarin speech recognition) and voice out (the phone's Chinese voice)
 - Corrections with tone-coloured pinyin, plus pronunciation tips when the speech recogniser misheard you
 - End-of-lesson summary, a day streak and minutes spoken
-- Hands-free mode: Lìlì listens again automatically after she speaks
+- Hands-free mode: Bīng listens again automatically after she speaks
 
 It's a web app (PWA). Chrome on Android installs it to your home screen like a normal app.
 
 ## What you need
 
-1. **A free Google AI key**, for Lìlì's brain (Google Gemini, free plan). Open https://aistudio.google.com/apikey, sign in with Google, tap **Create API key**, and paste the key into the app. There's no payment and no card. On the free plan, Google may use conversations to improve its products.
+1. **A free Google AI key**, for Bīng's brain (Google Gemini, free plan). Open https://aistudio.google.com/apikey, sign in with Google, tap **Create API key**, and paste the key into the app. There's no payment and no card. On the free plan, Google may use conversations to improve its products.
    Other brains are available in Settings: an experimental AI that runs on the phone itself (free, but it crashes on many phones), or Claude (smartest, but needs a paid Anthropic API key).
 2. **HTTPS hosting.** The phone only lets the app use the microphone over `https://`. GitHub Pages is free.
 
@@ -31,7 +31,7 @@ The code contains no secrets. Your API key never leaves your phone, except when 
 2. Tap **⋮ → Add to Home screen → Install**.
 3. Open Shuō ba from the home screen and paste your API key.
 4. Tap the mic. Chrome asks for microphone permission the first time. Tap **Allow**.
-5. If Lìlì has no voice: go to **Settings → System → Languages → Text-to-speech output → Google → Install voice data → Chinese (Mandarin)**.
+5. If Bīng has no voice: go to **Settings → System → Languages → Text-to-speech output → Google → Install voice data → Chinese (Mandarin)**.
 
 ## Run it on this PC (for testing)
 

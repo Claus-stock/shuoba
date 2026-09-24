@@ -1,4 +1,4 @@
-// Free mode: Lìlì's brain runs on the phone itself.
+// Free mode: Bīng's brain runs on the phone itself.
 // A small Chinese model (Qwen2.5) runs in Chrome with WebGPU via WebLLM. No account, no key, no cost.
 // The model is downloaded once and kept in the browser's cache, so later sessions start quickly and work offline.
 // Pinyin comes from pinyin-pro (a dictionary), which is more reliable than a small model's pinyin.

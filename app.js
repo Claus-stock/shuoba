@@ -59,7 +59,7 @@ const TOPICS = [
   { id: "birthday", cat: "social", zh: "生日聚会", en: "At a birthday party", role: "a guest at a friend's birthday party" },
   { id: "cinema", cat: "social", zh: "看电影", en: "Going to the movies", role: "a friend deciding which film to see" },
   { id: "free", cat: "social", zh: "随便聊聊", en: "Free chat", role: "a warm, curious friend chatting about everyday life" },
-  { id: "coach", cat: "coach", zh: "和丽丽聊天", en: "Talk with Lìlì", role: "your speaking coach" },
+  { id: "coach", cat: "coach", zh: "和冰冰聊天", en: "Talk with Bīng", role: "your speaking coach" },
   // Business
   { id: "work", cat: "business", zh: "自我介绍", en: "Introducing yourself at work", role: "a new colleague on your first day at a company in Shanghai" },
   { id: "networking", cat: "business", zh: "交换名片", en: "Networking & business cards", role: "a sales director you meet at an industry event, exchanging business cards" },
@@ -302,7 +302,7 @@ function setAvatar(state, label) {
   if (st) st.textContent = label || AVATAR_LABEL[state] || "";
 }
 
-// What Lìlì is saying right now, shown under her name on the talk screen.
+// What Bīng is saying right now, shown under her name on the talk screen.
 function setCaption(line) {
   const c = $("#caption");
   if (!c) return;
@@ -518,12 +518,12 @@ const SUMMARY_SCHEMA = {
 };
 
 function tutorRules(topic, level) {
-  return `You are Lìlì (丽丽), a warm, patient Mandarin speaking tutor from Beijing, shown to the learner as a friendly avatar. You run short spoken role-play lessons for one learner who wants to speak everyday and business Chinese.
+  return `You are Bīng (冰冰), a warm, patient Mandarin speaking tutor from Beijing, shown to the learner as a friendly avatar. You run short spoken role-play lessons for one learner who wants to speak everyday and business Chinese.
 
 Learner level: ${LEVELS[level]}.
 Scenario: ${topic.en} (${topic.zh}). In the role-play you act as ${topic.role}.
 
-Helping in English: if the learner answers in English ([spoken-en], or English in [typed]), doesn't understand, or asks something like "what does that mean?" / "how do I say…", step out of the role-play for a moment and help them as Lìlì:
+Helping in English: if the learner answers in English ([spoken-en], or English in [typed]), doesn't understand, or asks something like "what does that mean?" / "how do I say…", step out of the role-play for a moment and help them as Bīng:
 - help_en: 1–3 short, friendly spoken English sentences. Explain what they need (e.g. what your last line meant, or how to say what they wanted to say) and invite them to try saying it in Chinese now ("Try saying: …"). It is read aloud, so no pinyin, symbols or lists in help_en — you may include the Chinese characters of the phrase.
 - feedback.verdict "try this", with better_zh / better_pinyin = the Chinese sentence they should say.
 - reply: gently repeat or rephrase your last in-character line (simpler if needed) so they can now answer it in Chinese. Don't move the story on.
@@ -611,7 +611,7 @@ const L_SUMMARY_EX = {
 };
 
 function localRules(topic, level) {
-  return `You are Lìlì (丽丽), a Mandarin tutor doing a role-play.
+  return `You are Bīng (冰冰), a Mandarin tutor doing a role-play.
 YOU are ${topic.role}. The learner is the other person (${topic.en}). Speak only as your own character.
 Learner level: ${level === "beginner" ? "beginner, use very simple words" : level === "intermediate" ? "intermediate" : "advanced"}.
 Messages are tagged [spoken], [spoken-en] (English) or [typed].
@@ -641,7 +641,7 @@ async function ensureLocal() {
         const pct = Math.round(p * 100);
         lastLoadStep = `load ${a.size}${a.forceF32 ? " f32" : ""} ${pct}% ${String(text).slice(0, 60)}`;
         setAvatar("thinking", `Getting ready… ${pct}%`);
-        setStatus(`Preparing Lìlì's free AI: ${pct}%. The first time it downloads ${LOCAL_MODELS[a.size].size} (use Wi-Fi). Keep this screen open.`, "");
+        setStatus(`Preparing Bīng's free AI: ${pct}%. The first time it downloads ${LOCAL_MODELS[a.size].size} (use Wi-Fi). Keep this screen open.`, "");
       }, { forceF32: a.forceF32 });
       if (a.size !== chosen) { db.settings.localSize = a.size; save(); }
       lastLoadStep = `ready ${a.size}${a.forceF32 ? " f32" : ""}`;
@@ -772,7 +772,7 @@ async function finishReply(kind, res, keepExtras) {
 }
 
 function errorMessage(e) {
-  if (e?.code === "no_webgpu") return "This phone can't run the on-phone AI. Switch Lìlì's brain to Google (free) in Settings.";
+  if (e?.code === "no_webgpu") return "This phone can't run the on-phone AI. Switch Bīng's brain to Google (free) in Settings.";
   if (e?.code === "no_gkey") return "Add your free Google key first (see the home screen).";
   if (e?.code === "gemini_offline") return "No internet connection. Check it and try again.";
   if (e?.code === "gemini_http") {
@@ -858,7 +858,7 @@ function openTalk() {
   if (coach) {
     setCaption(s.target || null);
     setAvatar("idle", "Your speaking partner");
-    setStatus("Just talk — Lìlì listens by herself. Say “pause” to take a break.", "");
+    setStatus("Just talk — Bīng listens by herself. Say “pause” to take a break.", "");
     return;
   }
   const last = lastTutor(s);
@@ -957,17 +957,17 @@ async function tutorTurn(userMsg, schema, isStart) {
   }
 }
 
-// ---------------------------------------------------------------- coach: talk freely with Lìlì
-// Voice-first and hands-free: you talk in English, ask how to say something, Lìlì says it in
+// ---------------------------------------------------------------- coach: talk freely with Bīng
+// Voice-first and hands-free: you talk in English, ask how to say something, Bīng says it in
 // Chinese, then listens for your try and helps until it's right. She decides whether to listen
 // for English or Chinese next.
 const isCoach = () => db.session?.mode === "coach";
 let coachPaused = false;
-let playGen = 0; // bumped to interrupt Lìlì while she is talking
+let playGen = 0; // bumped to interrupt Bīng while she is talking
 
 const COACH_GREETING = {
   say: [
-    { lang: "en", text: "Hi, I'm Lìlì! Just talk to me in English. Ask me how to say anything in Chinese, and I'll help you say it until it sounds right." },
+    { lang: "en", text: "Hi, I'm Bīng! Just talk to me in English. Ask me how to say anything in Chinese, and I'll help you say it until it sounds right." },
   ],
   target: null,
   result: "none",
@@ -975,7 +975,7 @@ const COACH_GREETING = {
 };
 
 function coachRules(level) {
-  return `You are Lìlì (丽丽), a warm, patient Mandarin speaking coach from Beijing, talking with one learner by voice. Learner level: ${LEVELS[level]}.
+  return `You are Bīng (冰冰), a warm, patient Mandarin speaking coach from Beijing, talking with one learner by voice. Learner level: ${LEVELS[level]}.
 Everything in "say" is read aloud by text-to-speech, in order: "en" items with an English voice, "zh" items with a Chinese voice.
 
 How the conversation works:
@@ -1055,7 +1055,7 @@ async function askCoach(messages, level) {
 }
 
 // Compare what the phone heard with the phrase, character by character, with pinyin,
-// so Lìlì can say exactly which word or tone came out wrong.
+// so Bīng can say exactly which word or tone came out wrong.
 async function attemptCheck(heard, target) {
   const H = [...heard].filter(isHan);
   const T = [...target].filter(isHan);
@@ -1174,7 +1174,7 @@ const TONE_TIP = {
 const pick = (a) => a[Math.floor(Math.random() * a.length)];
 const bare = (py) => String(py || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
 
-// Build Lìlì's reply to a try at the practice phrase without asking the AI, so she answers at once.
+// Build Bīng's reply to a try at the practice phrase without asking the AI, so she answers at once.
 // Returns null when the try is unclear (English words, or almost nothing matched): then the AI decides.
 function quickCoachReply(s, heard, check) {
   if (!s.target?.zh || check?.score == null) return null;
@@ -1221,7 +1221,7 @@ async function coachTurn(userMsg) {
   setStatus("Thinking…", "");
   setAvatar("thinking");
   const thinking = el("div", "msg tutor");
-  thinking.append(el("div", "who", "Lìlì"), el("div", "bubble thinking", "…"));
+  thinking.append(el("div", "who", "Bīng"), el("div", "bubble thinking", "…"));
   chat.append(thinking);
   thinking.scrollIntoView({ behavior: "smooth", block: "end" });
 
@@ -1265,7 +1265,7 @@ async function coachTurn(userMsg) {
 async function playCoach(data) {
   const my = ++playGen;
   mic.classList.add("speaking");
-  setStatus("Lìlì is talking…", "");
+  setStatus("Bīng is talking…", "");
   const slow = data.result === "close" || data.result === "retry";
   for (const seg of data.say || []) {
     if ($("#talk").hidden || coachPaused || my !== playGen) break;
@@ -1301,7 +1301,7 @@ async function keepScreenOn(on) {
   } catch { /* not allowed here (battery saver etc.) — the conversation still works */ }
 }
 
-// Safety net: every few seconds, if the conversation is open, not paused, and Lìlì is neither
+// Safety net: every few seconds, if the conversation is open, not paused, and Bīng is neither
 // thinking, talking nor listening, she starts listening again. A turn can never get stuck.
 let idleSince = 0;
 setInterval(() => {
@@ -1332,7 +1332,7 @@ function pauseCoach() {
   coachPaused = true;
   quietRounds = 0;
   setAvatar("idle", "Paused");
-  setStatus("Paused — tap Lìlì to continue", "");
+  setStatus("Paused — tap Bīng to continue", "");
 }
 function resumeCoach(lang) {
   keepScreenOn(true);
@@ -1352,7 +1352,7 @@ function renderChat() {
   for (const item of s.items) {
     if (item.kind === "coach") {
       const w = el("div", "msg tutor");
-      w.append(el("div", "who", "Lìlì"));
+      w.append(el("div", "who", "Bīng"));
       const b = el("div", "bubble coach");
       for (const seg of item.say || []) {
         if (seg.lang === "zh") {
@@ -1383,11 +1383,11 @@ function renderChat() {
       chat.append(box);
     } else if (item.kind === "tutor") {
       const w = el("div", "msg tutor");
-      w.append(el("div", "who", `Lìlì · ${topic.zh}`));
+      w.append(el("div", "who", `Bīng · ${topic.zh}`));
       const b = el("div", "bubble");
       if (item.help) {
         const h = el("div", "help");
-        h.append(el("div", "label", "Lìlì helps"), el("div", "", item.help));
+        h.append(el("div", "label", "Bīng helps"), el("div", "", item.help));
         b.append(h);
       }
       b.append(lineBlock(item.reply));
@@ -1815,9 +1815,9 @@ $("#resume").onclick = () => {
   if (isCoach()) resumeCoach();
 };
 
-// ---------------------------------------------------------------- home Lìlì
+// ---------------------------------------------------------------- home Bīng
 const GREETINGS = [
-  { zh: "你好！我是丽丽。我们一起说中文吧！", pinyin: "Nǐ hǎo! Wǒ shì Lì lì. Wǒ men yī qǐ shuō zhōng wén ba!", en: "Hi! I'm Lìlì. Let's speak Chinese together!" },
+  { zh: "你好！我是冰冰。我们一起说中文吧！", pinyin: "Nǐ hǎo! Wǒ shì Bīng bing. Wǒ men yī qǐ shuō zhōng wén ba!", en: "Hi! I'm Bīng. Let's speak Chinese together!" },
   { zh: "今天你想练习什么？", pinyin: "Jīn tiān nǐ xiǎng liàn xí shén me?", en: "What would you like to practise today?" },
   { zh: "别担心，说错了也没关系。", pinyin: "Bié dān xīn, shuō cuò le yě méi guān xi.", en: "Don't worry, it's fine to make mistakes." },
   { zh: "加油！每天说一点。", pinyin: "Jiā yóu! Měi tiān shuō yī diǎn.", en: "You can do it! Speak a little every day." },
@@ -1830,7 +1830,7 @@ async function greet() {
   $("#hero-en").textContent = g.en;
   await speak(g.zh);
 }
-// Tap Lìlì (or "Talk to Lìlì") and a free conversation starts right away, hands-free.
+// Tap Bīng (or "Talk to Bīng") and a free conversation starts right away, hands-free.
 function talkToLili() {
   if (needsKey()) {
     greet();
@@ -1861,7 +1861,7 @@ function renderInstall() {
     $("#qr").textContent = "";
     $("#install-title").textContent = "Install Shuō ba on this phone";
     $("#install-help").innerHTML = installPrompt
-      ? "Add Lìlì to your home screen so she opens like a normal app."
+      ? "Add Bīng to your home screen so she opens like a normal app."
       : "In Chrome, tap <b>⋮ → Add to Home screen → Install</b>.";
     $("#install-btn").hidden = !installPrompt;
     $("#install-url").textContent = "";
