@@ -392,3 +392,8 @@ dialog::backdrop { background: rgba(10, 20, 16, .45); }
 .verdict.close { background: var(--fix); color: var(--ground); }
 .verdict.retry { background: var(--surface-2); color: var(--err); border: 1px solid var(--err); }
 .me .bubble.latin { font-family: var(--ui); font-size: 16px; }
+
+/* Talking with Lìlì needs no buttons: she listens by herself; tap her to pause. */
+.coach-mode .controls, .coach-mode .type-form { display: none !important; }
+.coach-mode .status { font-size: 16px; padding-bottom: 6px; }
+.coach-mode #stage .lili { cursor: pointer; }

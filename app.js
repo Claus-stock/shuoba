@@ -333,7 +333,7 @@ function listen(lang = "zh-CN") {
   };
   rec.onerror = (e) => {
     errorKind = e.error;
-    if (isCoach() && (e.error === "no-speech" || e.error === "aborted")) return; // handled in onend
+    if (isCoach() && e.error !== "not-allowed" && e.error !== "service-not-allowed") return; // handled in onend
     const msg = {
       "not-allowed": "Microphone is blocked. Allow it for this app in your phone's settings.",
       "service-not-allowed": "Microphone is blocked. Allow it for this app in your phone's settings.",
@@ -364,10 +364,18 @@ function listen(lang = "zh-CN") {
       else sendLearner(text, lang === "zh-CN" ? "spoken" : "spoken-en");
     } else if (isCoach()) {
       // Silence: keep listening a few rounds, then pause so the phone doesn't listen forever.
-      const quiet = !errorKind || errorKind === "no-speech";
-      if (!userStopped && quiet && !coachPaused && quietRounds < 3 && !$("#talk").hidden) {
-        quietRounds++;
+      // Silence: just keep listening (hands-free, e.g. in the car). Other hiccups (network) get a few
+      // retries with a growing pause, then she pauses.
+      const quiet = !errorKind || errorKind === "no-speech" || errorKind === "aborted";
+      const canRetry = !userStopped && !coachPaused && !$("#talk").hidden && !document.hidden;
+      // Guard: if listening keeps ending instantly (mic broken), stop instead of looping forever.
+      const instant = Date.now() - started < 1000;
+      if (canRetry && quiet && !(instant && quietRounds >= 5)) {
+        quietRounds = instant ? quietRounds + 1 : 0;
         setTimeout(() => listen(lang), 250);
+      } else if (canRetry && errorKind !== "not-allowed" && errorKind !== "service-not-allowed" && quietRounds < 3) {
+        quietRounds++;
+        setTimeout(() => listen(lang), 1500 * quietRounds);
       } else if (!$("#status").classList.contains("err")) {
         pauseCoach();
       }
@@ -770,11 +778,12 @@ function openTalk() {
   renderChat();
   const coach = isCoach();
   $("#t-hands").closest("label").hidden = coach;
+  document.body.classList.toggle("coach-mode", coach);
   $("#mic-en").querySelector("span:last-child").textContent = coach ? "Speak English" : "Answer in English";
   if (coach) {
     setCaption(s.target || null);
     setAvatar("idle", "Your speaking partner");
-    setStatus("Just talk — Lìlì listens by herself", "");
+    setStatus("Just talk — Lìlì listens by herself. Say “pause” to take a break.", "");
     return;
   }
   const last = lastTutor(s);
@@ -901,14 +910,15 @@ How the conversation works:
   - "good": it matches (or only trivially differs). Praise briefly, then either ask what they'd like to learn next (next_listen "en") or offer a slightly longer variation as the new target (next_listen "zh").
   - "close" or "retry": say exactly which word or tone was off, using the check (e.g. "杯 is first tone, high and flat"), say the phrase again as a {"lang":"zh"} item, and ask them to try again. Keep the same target; next_listen "zh".
   - After 4 tries on the same phrase, be encouraging and move on (next_listen "en").
-- If an [attempt] is clearly English or a new question rather than a try, answer it as English speech.
+- There are no buttons: the learner switches language just by talking. While you listen for Chinese, the phone hears everything as Chinese, so English speech arrives as an [attempt] with English words or with almost nothing matching. If an [attempt] contains English words, or matches under about 30% and doesn't sound like a try at the phrase, don't count it as a failed try: ask in English whether they'd like to try the phrase again or learn something else, and set next_listen "en" (keep the target). If they then say they want to try again, say the phrase again and set next_listen "zh".
 - [english] = English speech. [chinese] = Chinese speech with no target. [typed] = typed text.
+- If the learner asks you to pause, stop or take a break, say a short goodbye in English and set "pause": true (otherwise false).
 Rules: "zh" items contain only the Chinese phrase (no pinyin, no English). English items are short and spoken-style: no lists, no markdown, no pinyin, no emoji. "target" is the phrase being practised now, or {"zh":"","en":""} if none. Simplified characters only.
-Reply ONLY with JSON: {"say":[{"lang":"en","text":"..."},{"lang":"zh","text":"..."}],"target":{"zh":"...","en":"..."},"result":"none|good|close|retry","next_listen":"en|zh"}`;
+Reply ONLY with JSON: {"say":[{"lang":"en","text":"..."},{"lang":"zh","text":"..."}],"target":{"zh":"...","en":"..."},"result":"none|good|close|retry","next_listen":"en|zh","pause":false}`;
 }
 
 const COACH_SCHEMA = {
-  type: "object", additionalProperties: false, required: ["say", "target", "result", "next_listen"],
+  type: "object", additionalProperties: false, required: ["say", "target", "result", "next_listen", "pause"],
   properties: {
     say: {
       type: "array",
@@ -923,6 +933,7 @@ const COACH_SCHEMA = {
     },
     result: { type: "string", enum: ["none", "good", "close", "retry"] },
     next_listen: { type: "string", enum: ["en", "zh"] },
+    pause: { type: "boolean" },
   },
 };
 const COACH_EX = {
@@ -930,6 +941,7 @@ const COACH_EX = {
   target: { zh: "<Chinese phrase or empty>", en: "<meaning or empty>" },
   result: "none | good | close | retry",
   next_listen: "en | zh",
+  pause: false,
 };
 
 async function askCoach(messages, level) {
@@ -959,6 +971,7 @@ async function askCoach(messages, level) {
   d.target = tz && !/^<.*>$/.test(tz) ? { zh: tz, en: String(d.target.en || "").replace(/^<.*>$/, "") } : null;
   d.result = ["good", "close", "retry"].includes(d.result) ? d.result : "none";
   d.next_listen = d.next_listen === "zh" && d.target ? "zh" : "en";
+  d.pause = d.pause === true;
   // Pinyin from the dictionary, for the phrase and for every Chinese line she says.
   const lines = d.say.filter((x) => x.lang === "zh").map((x) => ({ zh: x.text }));
   await addPinyin({ lines, target: d.target });
@@ -1000,6 +1013,7 @@ async function attemptCheck(heard, target) {
 }
 
 async function startCoach() {
+  keepScreenOn(true);
   db.session = {
     mode: "coach", topicId: "coach", level: db.settings.level, startedAt: Date.now(),
     items: [{ kind: "coach", ...COACH_GREETING }],
@@ -1066,7 +1080,8 @@ async function coachTurn(userMsg) {
     chat.lastElementChild?.scrollIntoView({ behavior: "smooth", block: "start" });
     setBusy(false);
     await playCoach(data);
-    autoListen();
+    if (data.pause) pauseCoach();
+    else autoListen();
   } catch (e) {
     console.error(e);
     thinking.remove();
@@ -1107,15 +1122,29 @@ function autoListen() {
   listen(s.nextListen === "zh" && s.target ? "zh-CN" : "en-US");
 }
 
+let wakeLock = null;
+async function keepScreenOn(on) {
+  try {
+    if (on && !wakeLock && navigator.wakeLock && !document.hidden) {
+      wakeLock = await navigator.wakeLock.request("screen");
+      wakeLock.addEventListener?.("release", () => (wakeLock = null));
+    } else if (!on && wakeLock) {
+      await wakeLock.release();
+      wakeLock = null;
+    }
+  } catch { /* not allowed here (battery saver etc.) — the conversation still works */ }
+}
+
 function pauseCoach() {
   playGen++;
   mic.classList.remove("speaking");
   coachPaused = true;
   quietRounds = 0;
   setAvatar("idle", "Paused");
-  setStatus("Paused — tap the mic when you want to talk again", "");
+  setStatus("Paused — tap Lìlì to continue", "");
 }
 function resumeCoach(lang) {
+  keepScreenOn(true);
   playGen++;
   mic.classList.remove("speaking");
   coachPaused = false;
@@ -1221,6 +1250,8 @@ function renderChat() {
 const lastTutor = (s) => [...s.items].reverse().find((i) => i.kind === "tutor");
 
 async function finish() {
+  keepScreenOn(false);
+  document.body.classList.remove("coach-mode");
   const s = db.session;
   if (!s || busy) return;
   stopListening();
@@ -1409,6 +1440,9 @@ function begin(topicId) {
 }
 
 function goHome() {
+  keepScreenOn(false);
+  document.body.classList.remove("coach-mode");
+  if (isCoach()) coachPaused = true;
   stopListening();
   speechSynthesis?.cancel();
   show("home");
@@ -1554,6 +1588,30 @@ $("#finish").onclick = finish;
 $("#talk-back").onclick = goHome;
 $("#summary-back").onclick = goHome;
 $("#start-today").onclick = () => begin(todaysTopic().id);
+$("#stage .lili").addEventListener("click", () => {
+  if (!isCoach() || busy) return;
+  speechSynthesis?.cancel();
+  if (coachPaused) resumeCoach();
+  else {
+    if (listening) stopListening();
+    pauseCoach();
+  }
+});
+let pausedByLeaving = false;
+document.addEventListener("visibilitychange", () => {
+  if (!isCoach() || $("#talk").hidden) return;
+  if (document.hidden) {
+    if (!coachPaused) {
+      pausedByLeaving = true;
+      speechSynthesis?.cancel();
+      if (listening) stopListening();
+      pauseCoach();
+    }
+  } else if (pausedByLeaving && !busy) {
+    pausedByLeaving = false;
+    resumeCoach(); // also takes the screen lock again (Android drops it when the app is hidden)
+  }
+});
 $("#resume").onclick = () => {
   openTalk();
   if (isCoach()) resumeCoach();
