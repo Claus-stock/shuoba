@@ -1,9 +1,10 @@
 import Anthropic from "https://cdn.jsdelivr.net/npm/@anthropic-ai/sdk/+esm";
+import { LOCAL_MODELS, loadLocal, localChat, localReady, addPinyin } from "./local-ai.js";
 
 /* =========================================================================
    Shuō ba 说吧 — a daily Mandarin speaking partner.
    Voice in: Web Speech API (zh-CN).  Voice out: speechSynthesis.
-   Tutor: Claude via the Anthropic API, with the learner's own key.
+   Tutor: a free on-phone model (Qwen2.5 via WebLLM, see local-ai.js), or Claude with the learner's own key.
    Everything is stored in localStorage on the phone.
    ========================================================================= */
 
@@ -80,7 +81,7 @@ const LEVELS = {
 // ---------------------------------------------------------------- storage
 const KEY = "shuoba:v1";
 const defaults = {
-  settings: { apiKey: "", model: "claude-opus-5", level: "beginner", rate: 0.9, voice: "", autoSpeak: true, showPy: true, showEn: true, handsFree: true, v2: true },
+  settings: { apiKey: "", model: "claude-opus-5", level: "beginner", rate: 0.9, voice: "", autoSpeak: true, showPy: true, showEn: true, handsFree: true, v2: true, brain: "local", localSize: "standard" },
   days: [],
   minutes: {},
   history: [],
@@ -94,6 +95,8 @@ function load() {
     const settings = { ...defaults.settings, ...raw.settings };
     // v2: hands-free became the default, so you can just talk.
     if (!raw.settings?.v2) { settings.handsFree = true; settings.v2 = true; }
+    // v3: a free on-phone AI became the default; keep Claude for anyone who already added a key.
+    if (!raw.settings?.brain) settings.brain = raw.settings?.apiKey ? "claude" : "local";
     return { ...structuredClone(defaults), ...raw, settings };
   } catch {
     return structuredClone(defaults);
@@ -422,6 +425,8 @@ Formatting: simplified characters only. Pinyin always with tone marks, one sylla
 
 const START_INSTRUCTION = `[start] Begin the lesson. Reply with goal_en (one sentence: what the learner will be able to do after this lesson), 3–5 key_phrases they will need, your opening line as reply, and 2–3 suggestions for how they could answer it.`;
 
+const needsKey = () => db.settings.brain === "claude" && !db.settings.apiKey;
+
 let client = null;
 function getClient() {
   if (!db.settings.apiKey) throw { code: "no_key" };
@@ -461,7 +466,119 @@ async function askClaude({ system, messages, schema, effort = "low" }) {
   }
 }
 
+// ---------------------------------------------------------------- free AI (on the phone)
+// Smaller schemas for the small model: no pinyin (added from a dictionary afterwards).
+const L_LINE = {
+  type: "object", additionalProperties: false, required: ["zh", "en"],
+  properties: { zh: { type: "string" }, en: { type: "string" } },
+};
+const L_START = {
+  type: "object", additionalProperties: false, required: ["goal_en", "key_phrases", "reply", "suggestions"],
+  properties: { goal_en: { type: "string" }, key_phrases: { type: "array", items: L_LINE }, reply: L_LINE, suggestions: { type: "array", items: L_LINE } },
+};
+const L_TURN = {
+  type: "object", additionalProperties: false, required: ["help_en", "feedback", "reply", "suggestions"],
+  properties: {
+    help_en: { type: "string" },
+    feedback: {
+      type: "object", additionalProperties: false, required: ["verdict", "better_zh", "note_en"],
+      properties: { verdict: { type: "string", enum: ["great", "small fix", "try this"] }, better_zh: { type: "string" }, note_en: { type: "string" } },
+    },
+    reply: L_LINE,
+    suggestions: { type: "array", items: L_LINE },
+  },
+};
+const L_SUMMARY = {
+  type: "object", additionalProperties: false, required: ["stars", "praise_en", "fixes", "new_words", "next_time_en"],
+  properties: {
+    stars: { type: "integer" },
+    praise_en: { type: "string" },
+    fixes: {
+      type: "array",
+      items: {
+        type: "object", additionalProperties: false, required: ["you_said", "better_zh", "note_en"],
+        properties: { you_said: { type: "string" }, better_zh: { type: "string" }, note_en: { type: "string" } },
+      },
+    },
+    new_words: { type: "array", items: L_LINE },
+    next_time_en: { type: "string" },
+  },
+};
+
+function localRules(topic, level) {
+  return `You are Lìlì (丽丽), a friendly Mandarin Chinese tutor. Role-play: you are ${topic.role} (${topic.en}).
+The learner is a ${LEVELS[level]}. Use short, simple Chinese in simplified characters: 1–2 sentences, and end with a question.
+Learner messages are tagged [spoken] (Chinese from speech recognition), [spoken-en] (English) or [typed].
+- help_en: if the learner used English or is stuck, a short friendly English sentence telling them how to say it in Chinese. Otherwise "".
+- feedback.verdict: "great" if their Chinese is correct, "small fix" if it has a mistake, "try this" if they used English.
+- feedback.better_zh: the correct, natural Chinese for what they meant. feedback.note_en: one short tip in English.
+- reply: your next line in Chinese (zh) with its English translation (en).
+- suggestions: 2 short Chinese answers the learner could say next, with English.
+Reply only with JSON.`;
+}
+const LOCAL_START = `[start] Start the role-play. goal_en: one short sentence about what the learner will practise. key_phrases: 3 useful short Chinese phrases. reply: your first line. suggestions: 2 possible answers.`;
+
+async function ensureLocal() {
+  const size = db.settings.localSize || "standard";
+  if (localReady()) return;
+  setAvatar("thinking", "Getting ready…");
+  await loadLocal(size, (p) => {
+    const pct = Math.round(p * 100);
+    setAvatar("thinking", `Getting ready… ${pct}%`);
+    setStatus(`Preparing Lìlì's free AI: ${pct}%. The first time it downloads ${LOCAL_MODELS[size].size} (use Wi-Fi). Keep this screen open.`, "");
+  });
+  setAvatar("thinking");
+  setStatus("Thinking…", "");
+}
+
+// One entry point for both brains. kind: "start" | "turn" | "summary".
+async function askAI(kind, { topic, level, messages, transcript }) {
+  if (db.settings.brain === "claude") {
+    if (kind === "summary") {
+      return askClaude({
+        system: `You are a Mandarin speaking coach reviewing a short role-play lesson (${topic.en}) with a ${LEVELS[level]} learner. Learner lines marked "spoken" came from speech recognition, so wrong characters there usually mean a pronunciation slip.`,
+        messages: [{
+          role: "user",
+          content: `Transcript:\n${transcript}\n\nWrite the lesson summary: stars (1–5, how well they managed at their level — be encouraging but honest), praise_en (one or two sentences on what went well), fixes (the 1–4 most useful corrections, quoting what they said), new_words (4–8 useful words or phrases from this lesson they should remember), next_time_en (one concrete tip for next time). Chinese in simplified characters; pinyin with tone marks, one syllable per character separated by spaces.`,
+        }],
+        schema: SUMMARY_SCHEMA,
+      });
+    }
+    return askClaude({ system: tutorRules(topic, level), messages, schema: kind === "start" ? START_SCHEMA : TURN_SCHEMA });
+  }
+
+  await ensureLocal();
+  let res;
+  if (kind === "summary") {
+    res = await localChat({
+      system: `You are a friendly Mandarin tutor reviewing a short lesson (${topic.en}) with a ${LEVELS[level]} learner. Reply only with JSON.`,
+      messages: [{
+        role: "user",
+        content: `Transcript:\n${transcript.slice(-2500)}\n\nWrite: stars (1–5), praise_en (one encouraging sentence), fixes (up to 3 corrections of what the learner said), new_words (4–6 useful Chinese words from the lesson with English), next_time_en (one tip).`,
+      }],
+      schema: L_SUMMARY,
+      maxTokens: 700,
+    });
+  } else {
+    // Small model, small memory: send only the latest exchanges.
+    const msgs = kind === "start" ? [{ role: "user", content: LOCAL_START }] : messages.slice(-7);
+    res = await localChat({ system: localRules(topic, level), messages: msgs, schema: kind === "start" ? L_START : L_TURN, maxTokens: kind === "start" ? 450 : 320 });
+  }
+  await addPinyin(res.data);
+  if (kind === "turn") {
+    res.data.feedback.pronunciation_tip = "";
+    res.data.lesson_done = false;
+  }
+  return res;
+}
+
 function errorMessage(e) {
+  if (e?.code === "no_webgpu") return "This phone's browser can't run the free AI. Update Chrome and try again, or switch to Claude in Settings.";
+  if (db.settings.brain !== "claude" && !(e instanceof Anthropic.APIError) && !e?.code) {
+    return /memory|device|lost|allocate/i.test(String(e?.message || e))
+      ? "The free AI ran out of memory. Close other apps, or pick Lite in Settings."
+      : "The free AI had a problem. Check your internet for the first download, then try again.";
+  }
   if (e?.code === "no_key") return "Add your Anthropic API key in Settings first.";
   if (e?.code === "refusal") return "The tutor couldn't answer that. Try saying it another way.";
   if (e?.code === "too_long" || e?.code === "bad_json") return "The tutor's answer got cut off. Try again.";
@@ -542,10 +659,10 @@ async function tutorTurn(userMsg, schema, isStart) {
   // Keep the start turn plus the latest exchanges so long chats stay fast and cheap.
   const history = s.api.length > 30 ? [...s.api.slice(0, 2), ...s.api.slice(-26)] : s.api;
   try {
-    const { data, raw } = await askClaude({
-      system: tutorRules(topic, s.level),
+    const { data, raw } = await askAI(isStart ? "start" : "turn", {
+      topic,
+      level: s.level,
       messages: [...history, userMsg],
-      schema,
     });
     s.api.push(userMsg, { role: "assistant", content: raw });
     if (isStart) {
@@ -701,14 +818,7 @@ async function finish() {
     .join("\n");
   const entry = { date: dayKey(), topicId: s.topicId, turns: spoken.length, summary: null };
   try {
-    const { data } = await askClaude({
-      system: `You are a Mandarin speaking coach reviewing a short role-play lesson (${topic.en}) with a ${LEVELS[s.level]} learner. Learner lines marked "spoken" came from speech recognition, so wrong characters there usually mean a pronunciation slip.`,
-      messages: [{
-        role: "user",
-        content: `Transcript:\n${transcript}\n\nWrite the lesson summary: stars (1–5, how well they managed at their level — be encouraging but honest), praise_en (one or two sentences on what went well), fixes (the 1–4 most useful corrections, quoting what they said), new_words (4–8 useful words or phrases from this lesson they should remember), next_time_en (one concrete tip for next time). Chinese in simplified characters; pinyin with tone marks, one syllable per character separated by spaces.`,
-      }],
-      schema: SUMMARY_SCHEMA,
-    });
+    const { data } = await askAI("summary", { topic, level: s.level, transcript });
     entry.summary = data;
   } catch (e) {
     console.error(e);
@@ -783,7 +893,7 @@ function renderSummary(entry) {
 
 // ---------------------------------------------------------------- home
 function renderHome() {
-  $("#key-card").hidden = !!db.settings.apiKey;
+  $("#key-card").hidden = !needsKey();
   const hour = new Date().getHours();
   $("#greeting").textContent = hour < 11 ? "早上好 · Good morning" : hour < 18 ? "下午好 · Good afternoon" : "晚上好 · Good evening";
 
@@ -858,7 +968,7 @@ function renderTopics() {
 }
 
 function begin(topicId) {
-  if (!db.settings.apiKey) {
+  if (needsKey()) {
     $("#key-card").hidden = false;
     $("#key-card").scrollIntoView({ behavior: "smooth" });
     $("#key-input").focus();
@@ -901,7 +1011,8 @@ function fillVoiceSelect() {
 function openSettings() {
   const s = db.settings;
   $("#s-key").value = s.apiKey;
-  $("#s-model").value = s.model;
+  $("#s-model").value = s.brain === "claude" ? s.model : `local-${s.localSize || "standard"}`;
+  syncBrainField();
   $("#s-level").value = s.level;
   $("#s-rate").value = s.rate;
   $("#s-rate-val").textContent = `${Number(s.rate).toFixed(2)}×`;
@@ -918,7 +1029,14 @@ $("#s-test").addEventListener("click", () => {
 $("#settings-form").addEventListener("submit", () => {
   const s = db.settings;
   s.apiKey = $("#s-key").value.trim();
-  s.model = $("#s-model").value;
+  const choice = $("#s-model").value;
+  if (choice.startsWith("local-")) {
+    s.brain = "local";
+    s.localSize = choice.slice(6);
+  } else {
+    s.brain = "claude";
+    s.model = choice;
+  }
   s.level = $("#s-level").value;
   s.rate = Number($("#s-rate").value);
   s.autoSpeak = $("#s-auto").checked;
@@ -927,6 +1045,14 @@ $("#settings-form").addEventListener("submit", () => {
   renderHome();
 });
 $("#open-settings").onclick = openSettings;
+function syncBrainField() {
+  const local = $("#s-model").value.startsWith("local-");
+  $("#s-key-field").hidden = local;
+  $("#s-brain-note").textContent = local
+    ? "Free: downloads once, then works offline. No account or payment."
+    : "Claude is smarter but needs an Anthropic API key, and you pay per use.";
+}
+$("#s-model").addEventListener("change", syncBrainField);
 
 $("#key-form").addEventListener("submit", (e) => {
   e.preventDefault();
@@ -988,7 +1114,7 @@ async function greet() {
 }
 // Tap Lìlì (or "Talk to Lìlì") and a free conversation starts right away, hands-free.
 function talkToLili() {
-  if (!db.settings.apiKey) {
+  if (needsKey()) {
     greet();
     $("#hero-en").textContent = "To talk with me, paste your Anthropic API key below first.";
     $("#key-card").hidden = false;

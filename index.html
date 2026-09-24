@@ -66,6 +66,7 @@
         <input id="key-input" type="password" autocomplete="off" placeholder="sk-ant-…" aria-label="Anthropic API key">
         <button class="btn primary" type="submit">Save key</button>
       </form>
+      <p class="muted small">Don't want to pay? Open Settings and set <b>Lìlì's brain</b> to <b>Free</b>.</p>
     </section>
 
     <section class="card streak">
@@ -177,17 +178,25 @@
     <form method="dialog" class="settings-form" id="settings-form">
       <h2>Settings</h2>
       <label class="field">
+        <span>Lìlì's brain</span>
+        <select id="s-model">
+          <optgroup label="Free · runs on this phone">
+            <option value="local-standard">Free · Standard (about 1 GB download)</option>
+            <option value="local-lite">Free · Lite (about 400 MB, simpler, older phones)</option>
+            <option value="local-plus">Free · Plus (about 2 GB, smarter, newest phones)</option>
+          </optgroup>
+          <optgroup label="Claude · smarter, paid API key">
+            <option value="claude-opus-5">Claude Opus 5 · best corrections</option>
+            <option value="claude-sonnet-5">Claude Sonnet 5 · faster, cheaper</option>
+            <option value="claude-haiku-4-5">Claude Haiku 4.5 · fastest, cheapest</option>
+          </optgroup>
+        </select>
+        <small id="s-brain-note">Free: downloads once, then works offline. No account or payment.</small>
+      </label>
+      <label class="field" id="s-key-field">
         <span>Anthropic API key</span>
         <input id="s-key" type="password" autocomplete="off" placeholder="sk-ant-…">
-        <small>Stored only on this phone.</small>
-      </label>
-      <label class="field">
-        <span>Tutor model</span>
-        <select id="s-model">
-          <option value="claude-opus-5">Claude Opus 5 · best corrections</option>
-          <option value="claude-sonnet-5">Claude Sonnet 5 · faster, cheaper</option>
-          <option value="claude-haiku-4-5">Claude Haiku 4.5 · fastest, cheapest</option>
-        </select>
+        <small>Only needed for Claude. Stored only on this phone.</small>
       </label>
       <label class="field">
         <span>Level</span>
