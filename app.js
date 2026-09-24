@@ -962,7 +962,8 @@ function renderSummary(entry) {
   score.append(el("div", "stars", "★".repeat(n) + "☆".repeat(5 - n)));
   score.append(el("h2", "", `${topic.en} · ${topic.zh}`));
   score.append(el("p", "muted", d.praise_en));
-  score.append(el("div", "muted small", `${entry.turns} things said · ${streak()} day streak`));
+  const n1 = entry.turns, n2 = streak();
+  score.append(el("div", "muted small", `${n1} ${n1 === 1 ? "thing" : "things"} said · ${n2} day${n2 === 1 ? "" : "s"} streak`));
   body.append(score);
 
   if (d.fixes?.length) {
