@@ -1,5 +1,5 @@
 import Anthropic from "https://cdn.jsdelivr.net/npm/@anthropic-ai/sdk/+esm";
-import { LOCAL_MODELS, loadLocal, localChat, localReady, addPinyin } from "./local-ai.js";
+import { LOCAL_MODELS, loadLocal, localChat, localReady, addPinyin, resetLocal, isEngineBroken } from "./local-ai.js";
 
 /* =========================================================================
    Shuō ba 说吧 — a daily Mandarin speaking partner.
@@ -467,56 +467,39 @@ async function askClaude({ system, messages, schema, effort = "low" }) {
 }
 
 // ---------------------------------------------------------------- free AI (on the phone)
-// Smaller schemas for the small model: no pinyin (added from a dictionary afterwards).
-const L_LINE = {
-  type: "object", additionalProperties: false, required: ["zh", "en"],
-  properties: { zh: { type: "string" }, en: { type: "string" } },
+// Example answers that show the small model the JSON shape (pinyin is added afterwards from a dictionary).
+const L_LINE_EX = { zh: "<Chinese>", en: "<English>" };
+const L_START_EX = {
+  goal_en: "<one short sentence>",
+  key_phrases: [L_LINE_EX, L_LINE_EX],
+  reply: { zh: "<your first line in Chinese>", en: "<English>" },
+  suggestions: [L_LINE_EX],
 };
-const L_START = {
-  type: "object", additionalProperties: false, required: ["goal_en", "key_phrases", "reply", "suggestions"],
-  properties: { goal_en: { type: "string" }, key_phrases: { type: "array", items: L_LINE }, reply: L_LINE, suggestions: { type: "array", items: L_LINE } },
+const L_TURN_EX = {
+  help_en: "<English help or empty>",
+  feedback: { verdict: "great | small fix | try this", better_zh: "<correct Chinese>", note_en: "<short tip>" },
+  reply: { zh: "<your next line in Chinese>", en: "<English>" },
+  suggestions: [L_LINE_EX],
 };
-const L_TURN = {
-  type: "object", additionalProperties: false, required: ["help_en", "feedback", "reply", "suggestions"],
-  properties: {
-    help_en: { type: "string" },
-    feedback: {
-      type: "object", additionalProperties: false, required: ["verdict", "better_zh", "note_en"],
-      properties: { verdict: { type: "string", enum: ["great", "small fix", "try this"] }, better_zh: { type: "string" }, note_en: { type: "string" } },
-    },
-    reply: L_LINE,
-    suggestions: { type: "array", items: L_LINE },
-  },
-};
-const L_SUMMARY = {
-  type: "object", additionalProperties: false, required: ["stars", "praise_en", "fixes", "new_words", "next_time_en"],
-  properties: {
-    stars: { type: "integer" },
-    praise_en: { type: "string" },
-    fixes: {
-      type: "array",
-      items: {
-        type: "object", additionalProperties: false, required: ["you_said", "better_zh", "note_en"],
-        properties: { you_said: { type: "string" }, better_zh: { type: "string" }, note_en: { type: "string" } },
-      },
-    },
-    new_words: { type: "array", items: L_LINE },
-    next_time_en: { type: "string" },
-  },
+const L_SUMMARY_EX = {
+  stars: 4,
+  praise_en: "<one sentence>",
+  fixes: [{ you_said: "<what they said>", better_zh: "<correct Chinese>", note_en: "<short tip>" }],
+  new_words: [L_LINE_EX, L_LINE_EX],
+  next_time_en: "<one tip>",
 };
 
 function localRules(topic, level) {
-  return `You are Lìlì (丽丽), a friendly Mandarin Chinese tutor. Role-play: you are ${topic.role} (${topic.en}).
-The learner is a ${LEVELS[level]}. Use short, simple Chinese in simplified characters: 1–2 sentences, and end with a question.
-Learner messages are tagged [spoken] (Chinese from speech recognition), [spoken-en] (English) or [typed].
-- help_en: if the learner used English or is stuck, a short friendly English sentence telling them how to say it in Chinese. Otherwise "".
-- feedback.verdict: "great" if their Chinese is correct, "small fix" if it has a mistake, "try this" if they used English.
-- feedback.better_zh: the correct, natural Chinese for what they meant. feedback.note_en: one short tip in English.
-- reply: your next line in Chinese (zh) with its English translation (en).
-- suggestions: 2 short Chinese answers the learner could say next, with English.
-Reply only with JSON.`;
+  return `You are Lìlì (丽丽), a Mandarin tutor doing a role-play.
+YOU are ${topic.role}. The learner is the other person (${topic.en}). Speak only as your own character.
+Learner level: ${level === "beginner" ? "beginner, use very simple words" : level === "intermediate" ? "intermediate" : "advanced"}.
+Messages are tagged [spoken], [spoken-en] (English) or [typed].
+- feedback: verdict "great" (correct Chinese), "small fix" (a mistake) or "try this" (they used English). better_zh = correct Chinese for what they meant. note_en = a very short tip.
+- help_en: only if they used English or are stuck, one short English sentence on how to say it in Chinese; otherwise "".
+- reply: YOUR next line in character: one short, simple Chinese sentence that ends with a question, plus English.
+- suggestions: 1 short Chinese answer the learner could give.`;
 }
-const LOCAL_START = `[start] Start the role-play. goal_en: one short sentence about what the learner will practise. key_phrases: 3 useful short Chinese phrases. reply: your first line. suggestions: 2 possible answers.`;
+const localStart = (topic) => `[start] Start the role-play "${topic.en}". goal_en: one short sentence. key_phrases: 2 short Chinese phrases for this scenario. reply: your first line as ${topic.role}. suggestions: 1 possible answer.`;
 
 let lastLoadStep = "";
 async function ensureLocal() {
@@ -570,25 +553,54 @@ async function askAI(kind, { topic, level, messages, transcript }) {
     return askClaude({ system: tutorRules(topic, level), messages, schema: kind === "start" ? START_SCHEMA : TURN_SCHEMA });
   }
 
+  const run = () => {
+    if (kind === "summary") {
+      return localChat({
+        system: `You are a friendly Mandarin tutor reviewing a short lesson (${topic.en}) with a ${LEVELS[level]} learner.`,
+        messages: [{
+          role: "user",
+          content: `Transcript:
+${transcript.slice(-2500)}
+
+Write: stars (1–5), praise_en (one encouraging sentence), fixes (up to 3 corrections of what the learner said), new_words (4–6 useful Chinese words from the lesson with English), next_time_en (one tip).`,
+        }],
+        example: L_SUMMARY_EX,
+        maxTokens: 700,
+      });
+    }
+    // Small model, small memory: send only the latest exchanges.
+    // Send the conversation back unchanged each turn so WebLLM can reuse what it already read.
+    // Only when it gets long do we trim it (then it re-reads once).
+    let msgs = [{ role: "user", content: localStart(topic) }, ...messages.slice(1)];
+    if (msgs.length > 17) msgs = msgs.slice(-11);
+    return localChat({ system: localRules(topic, level), messages: msgs, example: kind === "start" ? L_START_EX : L_TURN_EX, maxTokens: kind === "start" ? 260 : 200 });
+  };
   await ensureLocal();
   let res;
-  if (kind === "summary") {
-    res = await localChat({
-      system: `You are a friendly Mandarin tutor reviewing a short lesson (${topic.en}) with a ${LEVELS[level]} learner. Reply only with JSON.`,
-      messages: [{
-        role: "user",
-        content: `Transcript:\n${transcript.slice(-2500)}\n\nWrite: stars (1–5), praise_en (one encouraging sentence), fixes (up to 3 corrections of what the learner said), new_words (4–6 useful Chinese words from the lesson with English), next_time_en (one tip).`,
-      }],
-      schema: L_SUMMARY,
-      maxTokens: 700,
-    });
-  } else {
-    // Small model, small memory: send only the latest exchanges.
-    const msgs = kind === "start" ? [{ role: "user", content: LOCAL_START }] : messages.slice(-7);
-    res = await localChat({ system: localRules(topic, level), messages: msgs, schema: kind === "start" ? L_START : L_TURN, maxTokens: kind === "start" ? 450 : 320 });
+  try {
+    res = await run();
+  } catch (e) {
+    if (!isEngineBroken(e) && e?.code !== "bad_json") throw e;
+    // The engine broke (or rambled): start it fresh and try once more.
+    console.warn("Free AI retry after", e);
+    if (isEngineBroken(e)) {
+      await resetLocal();
+      await ensureLocal();
+    }
+    res = await run();
   }
   // A small model sometimes leaves fields out; fill the gaps so the screen still works.
   const d = res.data || {};
+  // Drop any <placeholder> the model left unfilled.
+  const clean = (o) => {
+    if (Array.isArray(o)) o.forEach(clean);
+    else if (o && typeof o === "object") for (const k of Object.keys(o)) {
+      if (typeof o[k] === "string" && /^<.*>$/.test(o[k].trim())) o[k] = "";
+      else clean(o[k]);
+    }
+  };
+  clean(d);
+  if (d.feedback && !["great", "small fix", "try this"].includes(d.feedback.verdict)) d.feedback.verdict = "small fix";
   if (kind !== "summary") {
     d.reply = d.reply && typeof d.reply === "object" ? d.reply : { zh: String(d.reply || ""), en: "" };
     if (!d.reply.zh) throw { code: "bad_json", message: res.raw?.slice(0, 120) };

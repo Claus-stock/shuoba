@@ -26,6 +26,7 @@ async function modelId(size, forceF32) {
 }
 
 export const localReady = () => !!engine;
+export const localStats = () => engine?.runtimeStatsText?.();
 
 export async function loadLocal(size, onProgress, { forceF32 = false } = {}) {
   const id = await modelId(size, forceF32);
@@ -52,29 +53,55 @@ export async function loadLocal(size, onProgress, { forceF32 = false } = {}) {
   }
 }
 
-export async function localChat({ system, messages, schema, maxTokens = 400 }) {
+// Ask the model for one JSON object shaped like `example`.
+// We don't use WebLLM's grammar-constrained JSON mode: on some phones it fails with
+// "Object has already been disposed". Plain generation plus tolerant parsing is sturdier.
+export async function localChat({ system, messages, example, maxTokens = 400 }) {
   if (!engine) throw { code: "not_loaded" };
-  const req = {
-    messages: [{ role: "system", content: system }, ...messages],
+  const res = await engine.chat.completions.create({
+    messages: [
+      {
+        role: "system",
+        content: `${system}
+
+Answer with ONLY one JSON object, no other text. Fill in this exact JSON structure, replacing every <...> with your own content. Keep it short:
+${JSON.stringify(example)}`,
+      },
+      ...messages,
+    ],
     temperature: 0.6,
     max_tokens: maxTokens,
-  };
-  let res;
-  try {
-    res = await engine.chat.completions.create({ ...req, response_format: { type: "json_object", schema: JSON.stringify(schema) } });
-  } catch (e) {
-    // Some builds can't use a strict schema; fall back to plain JSON mode with the shape described in words.
-    console.warn("Schema mode failed, retrying with plain JSON", e);
-    req.messages[0] = { role: "system", content: `${system}\nJSON shape: ${JSON.stringify(schema)}` };
-    res = await engine.chat.completions.create({ ...req, response_format: { type: "json_object" } });
-  }
+  });
   const text = res.choices?.[0]?.message?.content || "";
+  const u = res.usage;
+  if (u) console.info(`Free AI: ${u.prompt_tokens} in, ${u.completion_tokens} out, prefill ${u.extra?.prefill_tokens_per_s?.toFixed?.(1)} tok/s, decode ${u.extra?.decode_tokens_per_s?.toFixed?.(1)} tok/s`);
+  const data = parseJson(text);
+  if (!data) throw { code: "bad_json", message: text.slice(0, 120) };
+  // Keep the exact text: sending it back unchanged next turn lets WebLLM reuse its memory (KV cache)
+  // of the conversation, so it only has to read the new message.
+  return { data, raw: text };
+}
+
+function parseJson(text) {
+  const t = text.replace(/```(?:json)?/gi, "").trim();
+  const start = t.indexOf("{");
+  const end = t.lastIndexOf("}");
+  if (start < 0 || end <= start) return null;
   try {
-    return { data: JSON.parse(text), raw: text };
+    return JSON.parse(t.slice(start, end + 1));
   } catch {
-    throw { code: "bad_json" };
+    return null;
   }
 }
+
+// After a GPU error the engine can't be reused: throw it away so the next call loads a fresh one.
+export async function resetLocal() {
+  const e = engine;
+  engine = null;
+  engineId = null;
+  if (e) await e.unload().catch(() => {});
+}
+export const isEngineBroken = (e) => /disposed|device.*lost|lost.*device|GPUDevice|out of memory|OOM/i.test(String(e?.message || e));
 
 // Fill in pinyin for every Chinese line in a reply: {zh} → pinyin, better_zh → better_pinyin.
 export async function addPinyin(obj) {
