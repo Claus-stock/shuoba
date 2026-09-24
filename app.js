@@ -572,6 +572,7 @@ async function askAI(kind, { topic, level, messages, transcript }) {
       system: `${base}\n\nReply with ONLY one JSON object in exactly this shape, replacing every <...> with your own content:\n${JSON.stringify(shape)}`,
       messages: kind === "summary" ? [{ role: "user", content: summaryPrompt(transcript) }] : messages,
       onModel: (m) => { db.settings.geminiModel = m; save(); },
+      onBusy: (text) => { setAvatar("thinking", "Waiting for Google…"); setStatus(text, ""); },
     });
     return finishReply(kind, res, true);
   }
@@ -661,6 +662,7 @@ function errorMessage(e) {
     if (e.status === 400 && /api key|API_KEY/i.test(e.message)) return "Google rejected your key. Copy it again from aistudio.google.com and paste it in Settings.";
     if (e.status === 403) return "Your Google key isn't allowed to use Gemini. Create a new key at aistudio.google.com.";
     if (e.status === 429) return "Google's free limit is used up for the moment. Wait a minute and try again (the daily limit resets overnight).";
+    if ([500, 502, 503, 504].includes(e.status)) return "Google's AI is very busy right now (not a problem with the app). Wait a minute and tap Try again.";
     return `Google's AI had a problem (${e.status}). Try again.`;
   }
   if (db.settings.brain === "local" && typeof e?.code !== "string" && !(e instanceof Anthropic.APIError)) {
@@ -697,7 +699,7 @@ function errorDetails(e) {
   const gpu = navigator.gpu ? "WebGPU yes" : "WebGPU no";
   const what = e?.code || e?.name || "Error";
   const msg = String(e?.message || (typeof e === "string" ? e : "") || "").replace(/\s+/g, " ").slice(0, 220);
-  const model = db.settings.brain === "claude" ? db.settings.model : db.settings.brain === "gemini" ? (db.settings.geminiModel || "gemini") : `phone-${db.settings.localSize}`;
+  const model = e?.model || (db.settings.brain === "claude" ? db.settings.model : db.settings.brain === "gemini" ? (db.settings.geminiModel || "gemini") : `phone-${db.settings.localSize}`);
   return `Details: ${what}${msg ? " – " + msg : ""} · ${model} · ${gpu} · ${lastLoadStep || "no load step"}`;
 }
 function showErrorDetails(e) {

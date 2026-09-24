@@ -3,37 +3,76 @@
 // and is sent only to Google, in a request header (never in the URL).
 
 const API = "https://generativelanguage.googleapis.com/v1beta";
-const DEFAULT_MODEL = "gemini-3.6-flash";
+// Used only if Google's model list can't be read: newest first.
+const FALLBACK_MODELS = ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-flash-latest"];
+const RETRY_DELAYS = [1500, 4000]; // after a busy/overloaded answer, wait and try the same model again
 
-export async function askGemini({ key, model, system, messages, maxTokens = 2048, onModel }) {
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// onModel(name): remember the model that worked. onBusy(text): tell the user we're retrying.
+export async function askGemini({ key, model, system, messages, maxTokens = 2048, onModel, onBusy }) {
   if (!key) throw { code: "no_gkey" };
-  // First time: ask Google which Flash models this key can use and take the newest, instead of guessing.
-  let use = model || (await newestFlash(key)) || DEFAULT_MODEL;
+  let lastErr = null;
+  // Try the remembered model first. Only if it fails, ask Google which Flash models this key can
+  // use (newest first, Flash-Lite last) and work down that list.
   const tried = new Set();
-  // Google retires model names now and then. When a model is gone, switch to the one Google
-  // names in its error message, else the newest Flash model on the account, else the Flash alias.
-  for (let i = 0; i < 4; i++) {
-    tried.add(use);
-    try {
-      const res = await call(key, use, system, messages, maxTokens);
-      if (use !== model) onModel?.(use);
-      return res;
-    } catch (e) {
-      if (!isModelGone(e)) throw e;
-      const next = [suggested(e.message), await newestFlash(key), "gemini-flash-latest"].find((m) => m && !tried.has(m));
-      if (!next) throw e;
-      console.warn(`Gemini model ${use} unavailable, switching to ${next}`);
-      use = next;
+  let queue = model ? [model] : [];
+  let listed = false;
+
+  while (true) {
+    if (!queue.length) {
+      if (listed) break;
+      listed = true;
+      const all = await flashModels(key);
+      queue = (all.length ? all : FALLBACK_MODELS).filter((x) => !tried.has(x));
+      if (!queue.length) break;
+    }
+    const m = queue.shift();
+    tried.add(m);
+    // Only the first model gets repeated tries; after that, move quickly down the list.
+    const delays = tried.size === 1 ? RETRY_DELAYS : [];
+    for (let attempt = 0; attempt <= delays.length; attempt++) {
+      try {
+        const res = await call(key, m, system, messages, maxTokens);
+        if (m !== model) onModel?.(m);
+        return res;
+      } catch (e) {
+        lastErr = { ...e, model: m };
+        if (isModelGone(e)) break; // this model is retired or not on this key: try the next one
+        if (!isBusy(e)) throw lastErr; // a real error (bad key, blocked, …): stop here
+        if (attempt < delays.length) {
+          onBusy?.("Google is busy — trying again…");
+          await sleep(delays[attempt]);
+        } else {
+          onBusy?.("Google is busy — trying another model…");
+        }
+      }
     }
   }
-  throw { code: "gemini_http", status: 404, message: "No available Gemini model found." };
+  throw lastErr || { code: "gemini_http", status: 404, message: "No available Gemini model found." };
 }
 
+// 503 overloaded, 500/504 server hiccups and 429 per-model rate limits are all worth retrying.
+const isBusy = (e) => e?.code === "gemini_http" && [429, 500, 502, 503, 504].includes(e.status);
 const isModelGone = (e) =>
   e?.code === "gemini_http" && (e.status === 404 || /no longer available|not found|deprecated|retired/i.test(e.message || ""));
 
-// "…Please update your code to use models/gemini-3.6-flash for…" → "gemini-3.6-flash"
-const suggested = (msg) => (String(msg || "").match(/use models\/(gemini-[\w.-]+)/i) || [])[1] || null;
+async function flashModels(key) {
+  try {
+    const r = await fetch(`${API}/models?pageSize=1000`, { headers: { "x-goog-api-key": key } });
+    if (!r.ok) return [];
+    const { models = [] } = await r.json();
+    const version = (n) => parseFloat((n.match(/^gemini-([\d.]+)-flash/) || [])[1] || "0");
+    const names = models
+      .filter((m) => (m.supportedGenerationMethods || []).includes("generateContent"))
+      .map((m) => m.name.replace(/^models\//, ""));
+    const flash = names.filter((n) => /^gemini-[\d.]+-flash(-\d{3})?$/.test(n)).sort((a, b) => version(b) - version(a));
+    const lite = names.filter((n) => /^gemini-[\d.]+-flash-lite(-\d{3})?$/.test(n)).sort((a, b) => version(b) - version(a));
+    return [...flash, ...lite];
+  } catch {
+    return [];
+  }
+}
 
 async function call(key, model, system, messages, maxTokens, withThinking = true) {
   const body = {
@@ -74,24 +113,6 @@ async function call(key, model, system, messages, maxTokens, withThinking = true
   const data = parseJson(text);
   if (!data) throw { code: "bad_json", message: text.slice(0, 120) };
   return { data, raw: text };
-}
-
-// The newest plain "gemini-X.Y-flash" model this key can use (no lite/preview/image/audio variants).
-async function newestFlash(key) {
-  try {
-    const r = await fetch(`${API}/models?pageSize=1000`, { headers: { "x-goog-api-key": key } });
-    if (!r.ok) return null;
-    const { models = [] } = await r.json();
-    const version = (n) => parseFloat((n.match(/^gemini-([\d.]+)-flash/) || [])[1] || "0");
-    const names = models
-      .filter((m) => (m.supportedGenerationMethods || []).includes("generateContent"))
-      .map((m) => m.name.replace(/^models\//, ""))
-      .filter((n) => /^gemini-[\d.]+-flash(-\d{3})?$/.test(n));
-    names.sort((a, b) => version(b) - version(a));
-    return names[0] || null;
-  } catch {
-    return null;
-  }
 }
 
 function parseJson(text) {
