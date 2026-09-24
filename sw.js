@@ -1,6 +1,6 @@
 // Caches the app shell so Shuō ba opens instantly and installs as an app.
 // API calls to Anthropic are never cached. The free AI's model files live in WebLLM's own caches, which we never delete.
-const CACHE = "shuoba-v8";
+const CACHE = "shuoba-v10";
 const SHELL = [
   "./",
   "index.html",
@@ -30,8 +30,10 @@ self.addEventListener("activate", (e) => {
 self.addEventListener("fetch", (e) => {
   const url = new URL(e.request.url);
   if (e.request.method !== "GET" || url.origin !== location.origin) return;
+  // "no-cache" asks GitHub whether the file changed (instead of trusting the browser's copy for
+  // up to 10 minutes), so a fix reaches the phone the next time the app is opened.
   e.respondWith(
-    fetch(e.request)
+    fetch(e.request, { cache: "no-cache" })
       .then((res) => {
         const copy = res.clone();
         caches.open(CACHE).then((c) => c.put(e.request, copy));

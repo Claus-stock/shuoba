@@ -7,7 +7,8 @@ const DEFAULT_MODEL = "gemini-3.6-flash";
 
 export async function askGemini({ key, model, system, messages, maxTokens = 2048, onModel }) {
   if (!key) throw { code: "no_gkey" };
-  let use = model || DEFAULT_MODEL;
+  // First time: ask Google which Flash models this key can use and take the newest, instead of guessing.
+  let use = model || (await newestFlash(key)) || DEFAULT_MODEL;
   const tried = new Set();
   // Google retires model names now and then. When a model is gone, switch to the one Google
   // names in its error message, else the newest Flash model on the account, else the Flash alias.

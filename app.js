@@ -1323,4 +1323,14 @@ document.body.classList.toggle("hide-py", !db.settings.showPy);
 document.body.classList.toggle("hide-en", !db.settings.showEn);
 renderHome();
 if (!Recognition) setStatus("This browser can't listen. Use Chrome on Android, or tap Type.", "err");
-if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js").catch(() => {});
+if ("serviceWorker" in navigator) {
+  // When an update arrives, reload once so the fix is used right away (not only on the next start).
+  const hadController = !!navigator.serviceWorker.controller;
+  let reloaded = false;
+  navigator.serviceWorker.addEventListener("controllerchange", () => {
+    if (!hadController || reloaded || !$("#talk").hidden) return;
+    reloaded = true;
+    location.reload();
+  });
+  navigator.serviceWorker.register("sw.js", { updateViaCache: "none" }).catch(() => {});
+}
