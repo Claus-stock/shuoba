@@ -362,6 +362,14 @@ function listen(lang = "zh-CN") {
   }
 
   let lastHeard = ""; // everything heard so far, final or not
+  let quietTimer = null;
+  // Don't wait for Chrome's own end-of-speech pause (1–2 s): stop as soon as the whole practice
+  // phrase has been heard, or after a short quiet moment.
+  const endSoon = (ms) => {
+    clearTimeout(quietTimer);
+    quietTimer = setTimeout(() => { if (listening && rec === thisRec) { try { rec.stop(); } catch { /* ignore */ } } }, ms);
+  };
+  const thisRec = rec;
   rec.onresult = (e) => {
     let interim = "";
     for (let i = e.resultIndex; i < e.results.length; i++) {
@@ -373,6 +381,17 @@ function listen(lang = "zh-CN") {
     for (let i = 0; i < e.results.length; i++) all += e.results[i][0].transcript;
     lastHeard = all;
     listenActivity = Date.now();
+    if (isCoach() && all.trim()) {
+      const han = (t) => [...t].filter(isHan).join("");
+      if (lang === "zh-CN" && target?.zh) {
+        const heard = han(all), want = han(target.zh);
+        // Whole phrase heard: answer now. As long as a try: short pause. Shorter than the phrase: the
+        // learner is probably mid-sentence, so give them a little more time.
+        endSoon(heard === want ? 150 : heard.length >= want.length ? 700 : 1400);
+      } else {
+        endSoon(lang === "zh-CN" ? 900 : 1200);
+      }
+    }
     setStatus(finalText + interim || "Listening…", "live");
   };
   rec.onerror = (e) => {
@@ -388,6 +407,7 @@ function listen(lang = "zh-CN") {
     if (msg) setStatus(msg, "err");
   };
   rec.onend = () => {
+    clearTimeout(quietTimer);
     listening = false;
     mic.classList.remove("listening");
     $("#mic-en").classList.remove("on");
@@ -1040,7 +1060,7 @@ async function attemptCheck(heard, target) {
   const H = [...heard].filter(isHan);
   const T = [...target].filter(isHan);
   if (!T.length) return { score: 0, text: "" };
-  if (H.join("") === T.join("")) return { score: 1, text: "Check: every character matches." };
+  if (H.join("") === T.join("")) return { score: 1, ops: [], text: "Check: every character matches." };
   const [hp, tp] = await Promise.all([pinyinArray(H.join("")), pinyinArray(T.join(""))]);
   // Edit-distance alignment of target vs heard.
   const n = T.length, m = H.length;
@@ -1049,14 +1069,19 @@ async function attemptCheck(heard, target) {
     for (let j = 1; j <= m; j++)
       D[i][j] = Math.min(D[i - 1][j] + 1, D[i][j - 1] + 1, D[i - 1][j - 1] + (T[i - 1] === H[j - 1] ? 0 : 1));
   const notes = [];
+  const ops = [];
   let i = n, j = m, same = 0;
   while (i > 0 || j > 0) {
     if (i > 0 && j > 0 && D[i][j] === D[i - 1][j - 1] + (T[i - 1] === H[j - 1] ? 0 : 1)) {
       if (T[i - 1] === H[j - 1]) same++;
-      else notes.unshift(`${T[i - 1]} (${tp[i - 1]}) was heard as ${H[j - 1]} (${hp[j - 1]})`);
+      else {
+        notes.unshift(`${T[i - 1]} (${tp[i - 1]}) was heard as ${H[j - 1]} (${hp[j - 1]})`);
+        ops.unshift({ type: "sub", t: T[i - 1], tp: tp[i - 1], h: H[j - 1], hp: hp[j - 1] });
+      }
       i--; j--;
     } else if (i > 0 && D[i][j] === D[i - 1][j] + 1) {
       notes.unshift(`${T[i - 1]} (${tp[i - 1]}) was missing`);
+      ops.unshift({ type: "miss", t: T[i - 1], tp: tp[i - 1] });
       i--;
     } else {
       notes.unshift(`extra ${H[j - 1]} (${hp[j - 1]})`);
@@ -1064,7 +1089,7 @@ async function attemptCheck(heard, target) {
     }
   }
   const score = same / n;
-  return { score, text: `Check: ${Math.round(score * 100)}% of characters matched. ${notes.slice(0, 5).join("; ")}.` };
+  return { score, ops, text: `Check: ${Math.round(score * 100)}% of characters matched. ${notes.slice(0, 5).join("; ")}.` };
 }
 
 async function startCoach() {
@@ -1087,6 +1112,7 @@ async function startCoach() {
 }
 
 async function coachHeard(text, lang, typed = false) {
+  const heardAt = Date.now();
   const s = db.session;
   if (!s) return;
   if (busy) { dlog("heard while busy: ignored"); return; }
@@ -1112,9 +1138,81 @@ async function coachHeard(text, lang, typed = false) {
     content = `[english] ${text}`;
   }
   s.items.push({ kind: "me", text, via, score: check?.score });
+  const userMsg = { role: "user", content };
+  const quick = via === "attempt" ? quickCoachReply(s, text, check) : null;
+  if (quick) {
+    // Instant answer. It is added to the AI's history too, so the conversation stays consistent.
+    const { note, ...forAi } = quick;
+    s.api.push(userMsg, { role: "assistant", content: JSON.stringify({ ...forAi, target: forAi.target || { zh: "", en: "" } }) });
+    const lines = quick.say.filter((x) => x.lang === "zh").map((x) => ({ zh: x.text }));
+    await addPinyin({ lines });
+    quick.say.filter((x) => x.lang === "zh").forEach((x, i) => (x.pinyin = lines[i].pinyin));
+    s.items[s.items.length - 1].result = quick.result;
+    s.target = quick.target;
+    s.nextListen = quick.next_listen;
+    s.items.push({ kind: "coach", say: quick.say, target: quick.target, result: quick.result, note });
+    dlog(`instant reply (${quick.result}) in ${Date.now() - heardAt} ms`);
+    save();
+    renderChat();
+    chat.lastElementChild?.scrollIntoView({ behavior: "smooth", block: "start" });
+    await playCoach(quick);
+    autoListen();
+    return;
+  }
   save();
   renderChat();
-  await coachTurn({ role: "user", content });
+  await coachTurn(userMsg);
+}
+
+const TONE_TIP = {
+  1: "first tone: high and flat",
+  2: "second tone: rising, like a question",
+  3: "third tone: dip down low",
+  4: "fourth tone: short and falling",
+  5: "neutral tone: short and light",
+};
+const pick = (a) => a[Math.floor(Math.random() * a.length)];
+const bare = (py) => String(py || "").normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase();
+
+// Build Lìlì's reply to a try at the practice phrase without asking the AI, so she answers at once.
+// Returns null when the try is unclear (English words, or almost nothing matched): then the AI decides.
+function quickCoachReply(s, heard, check) {
+  if (!s.target?.zh || check?.score == null) return null;
+  if (/[a-z]{2,}/i.test(heard) || check.score < 0.34) return null;
+  s.tries = (s.tries || 0) + 1;
+  if (check.score === 1) {
+    s.tries = 0;
+    return {
+      say: [{ lang: "en", text: `${pick(["Perfect! That sounded right.", "Excellent, that was spot on!", "Great job, that was very clear!"])} What would you like to learn next?` }],
+      target: null, result: "good", next_listen: "en", pause: false,
+    };
+  }
+  if (s.tries >= 4) {
+    s.tries = 0;
+    return {
+      say: [{ lang: "en", text: "Good effort! That one is tricky, we'll come back to it. What would you like to learn next?" }],
+      target: null, result: "retry", next_listen: "en", pause: false,
+    };
+  }
+  const op = check.ops.find((o) => o.type === "sub") || check.ops.find((o) => o.type === "miss");
+  const say = [];
+  let note = "";
+  if (op?.type === "sub" && bare(op.tp) === bare(op.hp)) {
+    const tone = toneOf(op.tp);
+    note = `${op.t} ${op.tp} is ${TONE_TIP[tone]} — it sounded like ${op.hp}.`;
+    say.push({ lang: "en", text: `${check.score >= 0.75 ? "Almost!" : "Not quite."} Watch the tone on this word. It's ${TONE_TIP[tone].replace(":", ",")}.` });
+  } else if (op?.type === "sub") {
+    note = `${op.t} ${op.tp} was heard as ${op.h} ${op.hp}.`;
+    say.push({ lang: "en", text: `${check.score >= 0.75 ? "Almost!" : "Not quite."} Listen carefully to this word.` });
+  } else if (op) {
+    note = `${op.t} ${op.tp} was missing.`;
+    say.push({ lang: "en", text: "Almost! You missed a word. Listen to it." });
+  } else {
+    say.push({ lang: "en", text: "Almost! Listen once more." });
+  }
+  if (op) say.push({ lang: "zh", text: op.t });
+  say.push({ lang: "en", text: "Now the whole sentence." }, { lang: "zh", text: s.target.zh }, { lang: "en", text: "Your turn." });
+  return { say, target: s.target, result: check.score >= 0.75 ? "close" : "retry", next_listen: "zh", pause: false, note };
 }
 
 async function coachTurn(userMsg) {
@@ -1129,12 +1227,14 @@ async function coachTurn(userMsg) {
 
   const history = s.api.length > 40 ? [...s.api.slice(0, 2), ...s.api.slice(-30)] : s.api;
   try {
+    const aiAt = Date.now();
     dlog(`AI ← ${userMsg.content.slice(0, 70)}`);
     const { data, raw } = await askCoach([...history, userMsg], s.level);
-    dlog(`AI → ${data.say.map((x) => x.text).join(" ").slice(0, 70)} [listen ${data.next_listen}]`);
+    dlog(`AI → ${data.say.map((x) => x.text).join(" ").slice(0, 70)} [listen ${data.next_listen}] in ${Date.now() - aiAt} ms`);
     s.api.push(userMsg, { role: "assistant", content: raw });
     const me = [...s.items].reverse().find((i) => i.kind === "me");
     if (me && me.via === "attempt") me.result = data.result === "none" ? null : data.result;
+    if ((data.target?.zh || "") !== (s.target?.zh || "")) s.tries = 0;
     s.target = data.target;
     s.nextListen = data.next_listen;
     s.items.push({ kind: "coach", say: data.say, target: data.target, result: data.result });
@@ -1261,6 +1361,7 @@ function renderChat() {
           b.append(box);
         } else b.append(el("p", "say-en", seg.text));
       }
+      if (item.note) b.append(el("div", "coach-note", item.note));
       w.append(b);
       chat.append(w);
       continue;

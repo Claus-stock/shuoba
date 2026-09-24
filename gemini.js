@@ -10,7 +10,7 @@ const RETRY_DELAYS = [1500, 4000]; // after a busy/overloaded answer, wait and t
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // onModel(name): remember the model that worked. onBusy(text): tell the user we're retrying.
-export async function askGemini({ key, model, system, messages, maxTokens = 2048, onModel, onBusy }) {
+export async function askGemini({ key, model, system, messages, maxTokens = 1024, onModel, onBusy }) {
   if (!key) throw { code: "no_gkey" };
   let lastErr = null;
   // Try the remembered model first. Only if it fails, ask Google which Flash models this key can
@@ -74,16 +74,20 @@ async function flashModels(key) {
   }
 }
 
-async function call(key, model, system, messages, maxTokens, withThinking = true) {
+// How much the model may think before answering: as little as the model allows (a conversation
+// needs speed). If a model rejects a level, try the next one, and finally no setting at all.
+const THINKING_LEVELS = ["minimal", "low", null];
+
+async function call(key, model, system, messages, maxTokens, level = 0) {
   const body = {
     systemInstruction: { parts: [{ text: system }] },
     contents: messages.map((m) => ({ role: m.role === "assistant" ? "model" : "user", parts: [{ text: m.content }] })),
     generationConfig: { responseMimeType: "application/json", temperature: 0.7, maxOutputTokens: maxTokens },
   };
-  // Flash models think before answering; a conversation feels better with as little wait as possible.
-  if (withThinking) {
+  const thinking = THINKING_LEVELS[level];
+  if (thinking) {
     if (/^gemini-2\.5-flash/.test(model)) body.generationConfig.thinkingConfig = { thinkingBudget: 0 };
-    else if (/^gemini-[3-9]/.test(model)) body.generationConfig.thinkingConfig = { thinkingLevel: "low" };
+    else if (/^gemini-[3-9]/.test(model)) body.generationConfig.thinkingConfig = { thinkingLevel: thinking };
   }
 
   let r;
@@ -99,9 +103,9 @@ async function call(key, model, system, messages, maxTokens, withThinking = true
   if (!r.ok) {
     const j = await r.json().catch(() => ({}));
     const err = { code: "gemini_http", status: r.status, message: j.error?.message || r.statusText };
-    // If this model doesn't accept the thinking setting, ask again without it.
-    if (withThinking && r.status === 400 && /thinking/i.test(err.message) && body.generationConfig.thinkingConfig) {
-      return call(key, model, system, messages, maxTokens, false);
+    // If this model doesn't accept the thinking setting, try the next level.
+    if (r.status === 400 && /thinking/i.test(err.message) && body.generationConfig.thinkingConfig) {
+      return call(key, model, system, messages, maxTokens, level + 1);
     }
     throw err;
   }
