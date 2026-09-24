@@ -136,6 +136,20 @@ function markPracticed(minutes) {
   save();
 }
 
+// ---------------------------------------------------------------- troubleshooting log
+// The last events of the conversation (listening, what was heard, AI calls, speaking), kept on the
+// phone so a screenshot can show exactly where a conversation got stuck.
+const LOG_KEY = "shuoba:log";
+let logLines = [];
+try { logLines = JSON.parse(localStorage.getItem(LOG_KEY) || "[]"); } catch { logLines = []; }
+function dlog(msg) {
+  const d = new Date();
+  const t = `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}:${String(d.getSeconds()).padStart(2, "0")}`;
+  logLines.push(`${t} ${msg}`);
+  if (logLines.length > 80) logLines = logLines.slice(-80);
+  try { localStorage.setItem(LOG_KEY, JSON.stringify(logLines)); } catch { /* ignore */ }
+}
+
 // ---------------------------------------------------------------- tones
 const TONE = {};
 "āēīōūǖĀĒĪŌŪǕ".split("").forEach((c) => (TONE[c] = 1));
@@ -191,11 +205,15 @@ if ("speechSynthesis" in window) {
   loadVoices();
   speechSynthesis.addEventListener?.("voiceschanged", loadVoices);
 }
+// Chrome on Android sometimes never fires "end" (for example when the utterance object gets garbage
+// collected). So: keep a reference, watch speechSynthesis.speaking, and cap the wait by text length.
+const liveUtterances = new Set();
 function speak(text, rate = db.settings.rate, lang = "zh-CN") {
   return new Promise((resolve) => {
     if (!("speechSynthesis" in window) || !text) return resolve();
     speechSynthesis.cancel();
     const u = new SpeechSynthesisUtterance(text);
+    liveUtterances.add(u);
     u.lang = lang;
     u.rate = rate;
     if (lang === "zh-CN") {
@@ -208,8 +226,27 @@ function speak(text, rate = db.settings.rate, lang = "zh-CN") {
     }
     const wasState = avatarState;
     setAvatar("speaking");
-    const done = () => { if (avatarState === "speaking") setAvatar(wasState === "speaking" ? "idle" : wasState); resolve(); };
-    u.onend = u.onerror = done;
+    let finished = false;
+    let started = false;
+    const maxMs = 4000 + text.length * (lang === "zh-CN" ? 450 : 120) / Math.max(0.4, rate);
+    const t0 = Date.now();
+    const done = (why) => {
+      if (finished) return;
+      finished = true;
+      clearInterval(watch);
+      liveUtterances.delete(u);
+      if (why !== "end") dlog(`speak ${lang} ended by ${why}`);
+      if (avatarState === "speaking") setAvatar(wasState === "speaking" ? "idle" : wasState);
+      resolve();
+    };
+    u.onstart = () => (started = true);
+    u.onend = () => done("end");
+    u.onerror = (e) => done(`error ${e?.error || ""}`);
+    const watch = setInterval(() => {
+      if (speechSynthesis.speaking) started = true;
+      else if (started && !speechSynthesis.pending && Date.now() - t0 > 600) done("watchdog (no end event)");
+      if (Date.now() - t0 > maxMs) { speechSynthesis.cancel(); done("timeout"); }
+    }, 400);
     speechSynthesis.speak(u);
   });
 }
@@ -293,6 +330,7 @@ let listening = false;
 let userStopped = false;
 let quietRounds = 0;
 let switchTo = null; // listen again in this language as soon as the current listening has ended
+let listenActivity = 0; // last time the recognizer started or heard something
 function listen(lang = "zh-CN") {
   if (!Recognition) {
     setStatus("This browser can't listen. Use Chrome on Android, or tap Type.", "err");
@@ -309,6 +347,7 @@ function listen(lang = "zh-CN") {
   let errorKind = "";
   const started = Date.now();
   listening = true;
+  listenActivity = Date.now();
   userStopped = false;
   mic.classList.add("listening");
   $("#mic-en").classList.toggle("on", lang !== "zh-CN");
@@ -322,6 +361,7 @@ function listen(lang = "zh-CN") {
     setStatus(lang === "zh-CN" ? "Listening… 请说中文" : "Listening… say it in English and I'll help", "");
   }
 
+  let lastHeard = ""; // everything heard so far, final or not
   rec.onresult = (e) => {
     let interim = "";
     for (let i = e.resultIndex; i < e.results.length; i++) {
@@ -329,6 +369,10 @@ function listen(lang = "zh-CN") {
       if (r.isFinal) finalText += r[0].transcript;
       else interim += r[0].transcript;
     }
+    let all = "";
+    for (let i = 0; i < e.results.length; i++) all += e.results[i][0].transcript;
+    lastHeard = all;
+    listenActivity = Date.now();
     setStatus(finalText + interim || "Listening…", "live");
   };
   rec.onerror = (e) => {
@@ -356,7 +400,9 @@ function listen(lang = "zh-CN") {
       listen(next);
       return;
     }
-    const text = finalText.trim();
+    // Chrome on Android sometimes ends without marking the result final: then use what it heard.
+    const text = (finalText.trim() || lastHeard.trim());
+    dlog(`heard [${lang}] ${text ? `"${text}"${finalText.trim() ? "" : " (not final)"}` : errorKind ? `nothing (${errorKind})` : "nothing"}`);
     if (text) {
       quietRounds = 0;
       markPracticed((Date.now() - started) / 60000);
@@ -383,7 +429,15 @@ function listen(lang = "zh-CN") {
       setStatus("Tap the mic and answer in Chinese", "");
     }
   };
-  rec.start();
+  try {
+    rec.start();
+  } catch (e) {
+    // "already started" or similar: reset so the next attempt can start cleanly.
+    dlog(`listen start failed: ${e?.message || e}`);
+    listening = false;
+    mic.classList.remove("listening");
+    if (isCoach()) setTimeout(autoListen, 1000);
+  }
 }
 function stopListening() { userStopped = true; try { rec?.stop(); } catch { /* already stopped */ } }
 
@@ -1033,10 +1087,17 @@ async function startCoach() {
 
 async function coachHeard(text, lang, typed = false) {
   const s = db.session;
-  if (!s || busy) return;
+  if (!s) return;
+  if (busy) { dlog("heard while busy: ignored"); return; }
+  setStatus("Thinking…", "");
   let content, via, check = null;
   if (lang === "zh-CN" && s.target?.zh) {
-    check = await attemptCheck(text, s.target.zh);
+    try {
+      check = await attemptCheck(text, s.target.zh);
+    } catch (e) {
+      dlog(`check failed: ${e?.message || e}`);
+      check = { score: null, text: "" };
+    }
     via = "attempt";
     content = `[attempt] Target: ${s.target.zh}. Heard: ${text}. ${check.text}`;
   } else if (typed) {
@@ -1067,7 +1128,9 @@ async function coachTurn(userMsg) {
 
   const history = s.api.length > 40 ? [...s.api.slice(0, 2), ...s.api.slice(-30)] : s.api;
   try {
+    dlog(`AI ← ${userMsg.content.slice(0, 70)}`);
     const { data, raw } = await askCoach([...history, userMsg], s.level);
+    dlog(`AI → ${data.say.map((x) => x.text).join(" ").slice(0, 70)} [listen ${data.next_listen}]`);
     s.api.push(userMsg, { role: "assistant", content: raw });
     const me = [...s.items].reverse().find((i) => i.kind === "me");
     if (me && me.via === "attempt") me.result = data.result === "none" ? null : data.result;
@@ -1084,6 +1147,7 @@ async function coachTurn(userMsg) {
     else autoListen();
   } catch (e) {
     console.error(e);
+    dlog(`AI error: ${e?.code || ""} ${e?.status || ""} ${String(e?.message || "").slice(0, 80)}`);
     thinking.remove();
     setBusy(false);
     coachPaused = true;
@@ -1100,6 +1164,7 @@ async function coachTurn(userMsg) {
 async function playCoach(data) {
   const my = ++playGen;
   mic.classList.add("speaking");
+  setStatus("Lìlì is talking…", "");
   const slow = data.result === "close" || data.result === "retry";
   for (const seg of data.say || []) {
     if ($("#talk").hidden || coachPaused || my !== playGen) break;
@@ -1134,6 +1199,31 @@ async function keepScreenOn(on) {
     }
   } catch { /* not allowed here (battery saver etc.) — the conversation still works */ }
 }
+
+// Safety net: every few seconds, if the conversation is open, not paused, and Lìlì is neither
+// thinking, talking nor listening, she starts listening again. A turn can never get stuck.
+let idleSince = 0;
+setInterval(() => {
+  const active = isCoach() && !coachPaused && !$("#talk").hidden && !document.hidden;
+  const doing = busy || listening || speechSynthesis?.speaking || mic.classList.contains("speaking");
+  // A listening session that never ends (another Chrome quirk): stop it and start fresh.
+  if (active && listening && Date.now() - listenActivity > 45000) {
+    dlog("watchdog: listening hung, restarting");
+    listenActivity = Date.now();
+    try { rec?.abort(); } catch { /* ignore */ }
+    setTimeout(() => {
+      if (listening) { listening = false; mic.classList.remove("listening"); autoListen(); }
+    }, 2000);
+    return;
+  }
+  if (!active || doing) { idleSince = 0; return; }
+  if (!idleSince) { idleSince = Date.now(); return; }
+  if (Date.now() - idleSince > 5000) {
+    idleSince = 0;
+    dlog("watchdog: nothing happening, listening again");
+    autoListen();
+  }
+}, 1000);
 
 function pauseCoach() {
   playGen++;
@@ -1514,6 +1604,12 @@ $("#settings-form").addEventListener("submit", () => {
   renderHome();
 });
 $("#open-settings").onclick = openSettings;
+$("#s-log").onclick = () => {
+  const v = $("#s-log-view");
+  v.hidden = !v.hidden;
+  v.textContent = logLines.length ? logLines.slice(-40).join("\n") : "Nothing logged yet.";
+  if (!v.hidden) v.scrollTop = v.scrollHeight;
+};
 function syncBrainField() {
   const v = $("#s-model").value;
   const local = v.startsWith("local-");

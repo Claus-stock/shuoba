@@ -397,3 +397,4 @@ dialog::backdrop { background: rgba(10, 20, 16, .45); }
 .coach-mode .controls, .coach-mode .type-form { display: none !important; }
 .coach-mode .status { font-size: 16px; padding-bottom: 6px; }
 .coach-mode #stage .lili { cursor: pointer; }
+pre.log { font: 11px/1.45 ui-monospace, Consolas, monospace; background: var(--surface-2); border-radius: 10px; padding: 10px; max-height: 260px; overflow: auto; white-space: pre-wrap; word-break: break-word; margin: 0; }
