@@ -1,6 +1,6 @@
 import Anthropic from "https://cdn.jsdelivr.net/npm/@anthropic-ai/sdk/+esm";
 import { LOCAL_MODELS, loadLocal, localChat, localReady, addPinyin, pinyinArray, resetLocal, isEngineBroken } from "./local-ai.js";
-import { askGemini } from "./gemini.js";
+import { askGemini, streamGemini, parseJson } from "./gemini.js";
 
 /* =========================================================================
    Shuō ba 说吧 — a daily Mandarin speaking partner.
@@ -389,7 +389,7 @@ function listen(lang = "zh-CN") {
         // learner is probably mid-sentence, so give them a little more time.
         endSoon(heard === want ? 150 : heard.length >= want.length ? 700 : 1400);
       } else {
-        endSoon(lang === "zh-CN" ? 900 : 1200);
+        endSoon(lang === "zh-CN" ? 900 : 900);
       }
     }
     setStatus(finalText + interim || "Listening…", "live");
@@ -974,7 +974,7 @@ const COACH_GREETING = {
   next_listen: "en",
 };
 
-function coachRules(level) {
+function coachRules(level, format = "json") {
   return `You are Bīng (冰冰), a warm, patient Mandarin speaking coach from Beijing, talking with one learner by voice. Learner level: ${LEVELS[level]}.
 Everything in "say" is read aloud by text-to-speech, in order: "en" items with an English voice, "zh" items with a Chinese voice.
 
@@ -989,7 +989,48 @@ How the conversation works:
 - [english] = English speech. [chinese] = Chinese speech with no target. [typed] = typed text.
 - If the learner asks you to pause, stop or take a break, say a short goodbye in English and set "pause": true (otherwise false).
 Rules: "zh" items contain only the Chinese phrase (no pinyin, no English). English items are short and spoken-style: no lists, no markdown, no pinyin, no emoji. "target" is the phrase being practised now, or {"zh":"","en":""} if none. Simplified characters only.
-Reply ONLY with JSON: {"say":[{"lang":"en","text":"..."},{"lang":"zh","text":"..."}],"target":{"zh":"...","en":"..."},"result":"none|good|close|retry","next_listen":"en|zh","pause":false}`;
+${format === "lines" ? COACH_LINES_FORMAT : COACH_JSON_FORMAT}`;
+}
+const COACH_JSON_FORMAT = `Reply ONLY with JSON: {"say":[{"lang":"en","text":"..."},{"lang":"zh","text":"..."}],"target":{"zh":"...","en":"..."},"result":"none|good|close|retry","next_listen":"en|zh","pause":false}`;
+// Read aloud line by line while it streams in, so Bīng starts talking as soon as the first line exists.
+const COACH_LINES_FORMAT = `Reply in exactly this line format and nothing else, one item per line, in this order:
+RESULT: none|good|close|retry
+TARGET: <Chinese phrase> | <English meaning>   (or TARGET: none)
+EN: <one short English sentence to say>
+ZH: <the Chinese phrase to say>
+EN: <…more lines as needed, in speaking order…>
+LISTEN: en|zh
+PAUSE: no|yes
+Each EN line is one short sentence, so speaking can start right away. Keep the whole answer short.`;
+
+// Convert a stored JSON answer to the line format (for Gemini's history), or keep lines as they are.
+function asLines(content) {
+  const d = parseJson(content);
+  if (!d || !Array.isArray(d.say)) return content;
+  return [
+    `RESULT: ${d.result || "none"}`,
+    `TARGET: ${d.target?.zh ? `${d.target.zh} | ${d.target.en || ""}` : "none"}`,
+    ...d.say.map((x) => `${x.lang === "zh" ? "ZH" : "EN"}: ${x.text}`),
+    `LISTEN: ${d.next_listen || "en"}`,
+    `PAUSE: ${d.pause ? "yes" : "no"}`,
+  ].join("\n");
+}
+function applyCoachLine(acc, line, onSeg) {
+  const m = line.replace(/^[\s*\-•>]+/, "").match(/^(RESULT|TARGET|EN|ZH|LISTEN|PAUSE)\s*[:：]\s*(.*)$/i);
+  if (!m) return;
+  const key = m[1].toUpperCase();
+  const val = m[2].trim();
+  if (key === "EN" || key === "ZH") {
+    if (!val) return;
+    const seg = { lang: key === "ZH" ? "zh" : "en", text: val };
+    acc.say.push(seg);
+    onSeg?.(seg, acc);
+  } else if (key === "RESULT") acc.result = val.toLowerCase();
+  else if (key === "TARGET") {
+    const [zh, en = ""] = val.split("|").map((x) => x.trim());
+    acc.target = zh && !/^none$/i.test(zh) ? { zh, en } : null;
+  } else if (key === "LISTEN") acc.next_listen = /zh/i.test(val) ? "zh" : "en";
+  else if (key === "PAUSE") acc.pause = /^y/i.test(val);
 }
 
 const COACH_SCHEMA = {
@@ -1019,20 +1060,41 @@ const COACH_EX = {
   pause: false,
 };
 
-async function askCoach(messages, level) {
+async function askCoach(messages, level, onSeg) {
   const system = coachRules(level);
   let res;
-  if (db.settings.brain === "claude") {
-    res = await askClaude({ system, messages, schema: COACH_SCHEMA });
-  } else if (db.settings.brain === "gemini") {
-    res = await askGemini({
+  let streamed = false;
+  if (db.settings.brain === "gemini") {
+    const acc = { say: [], target: null, result: "none", next_listen: "en", pause: false };
+    let buf = "";
+    const text = await streamGemini({
       key: db.settings.geminiKey,
       model: db.settings.geminiModel,
-      system,
-      messages,
+      system: coachRules(level, "lines"),
+      messages: messages.map((m) => (m.role === "assistant" ? { ...m, content: asLines(m.content) } : m)),
       onModel: (m) => { db.settings.geminiModel = m; save(); },
-      onBusy: (text) => { setAvatar("thinking", "Waiting for Google…"); setStatus(text, ""); },
+      onBusy: (t) => { setAvatar("thinking", "Waiting for Google…"); setStatus(t, ""); },
+      onDelta: (t) => {
+        buf += t;
+        let i;
+        while ((i = buf.indexOf("\n")) >= 0) {
+          applyCoachLine(acc, buf.slice(0, i), onSeg);
+          buf = buf.slice(i + 1);
+        }
+      },
     });
+    if (buf.trim()) applyCoachLine(acc, buf, onSeg);
+    if (acc.say.length) {
+      streamed = true;
+      res = { data: acc, raw: text };
+    } else {
+      // The model answered in JSON after all: use it (spoken after it arrives).
+      const j = parseJson(text);
+      if (!j) throw { code: "bad_json", message: text.slice(0, 120) };
+      res = { data: j, raw: text };
+    }
+  } else if (db.settings.brain === "claude") {
+    res = await askClaude({ system, messages, schema: COACH_SCHEMA });
   } else {
     await ensureLocal();
     res = await localChat({ system, messages: messages.slice(-9), example: COACH_EX, maxTokens: 300 });
@@ -1051,7 +1113,7 @@ async function askCoach(messages, level) {
   const lines = d.say.filter((x) => x.lang === "zh").map((x) => ({ zh: x.text }));
   await addPinyin({ lines, target: d.target });
   d.say.filter((x) => x.lang === "zh").forEach((x, i) => (x.pinyin = lines[i].pinyin));
-  return { data: d, raw: res.raw };
+  return { data: d, raw: res.raw, streamed };
 }
 
 // Compare what the phone heard with the phrase, character by character, with pinyin,
@@ -1229,7 +1291,37 @@ async function coachTurn(userMsg) {
   try {
     const aiAt = Date.now();
     dlog(`AI ← ${userMsg.content.slice(0, 70)}`);
-    const { data, raw } = await askCoach([...history, userMsg], s.level);
+    const my = ++playGen;
+    let live = { result: "none", target: null };
+    const q = speechQueue(my, () => live);
+    let started = false;
+    const begin = () => {
+      if (started) return;
+      started = true;
+      mic.classList.add("speaking");
+      setStatus("Bīng is talking…", "");
+    };
+    // If Google takes a moment, acknowledge right away so the pause doesn't feel dead.
+    const filler = setTimeout(() => {
+      if (!started && my === playGen && !coachPaused) {
+        dlog("slow answer: saying a filler");
+        begin();
+        q.push({ lang: "en", text: pick(["Okay.", "Mm-hm.", "Let me see."]) });
+      }
+    }, 900);
+    const onSeg = (seg, acc) => {
+      live = acc;
+      if (!started) dlog(`first words after ${Date.now() - aiAt} ms`);
+      begin();
+      q.push(seg);
+    };
+    let turn;
+    try {
+      turn = await askCoach([...history, userMsg], s.level, onSeg);
+    } finally {
+      clearTimeout(filler);
+    }
+    const { data, raw, streamed } = turn;
     dlog(`AI → ${data.say.map((x) => x.text).join(" ").slice(0, 70)} [listen ${data.next_listen}] in ${Date.now() - aiAt} ms`);
     s.api.push(userMsg, { role: "assistant", content: raw });
     const me = [...s.items].reverse().find((i) => i.kind === "me");
@@ -1243,7 +1335,16 @@ async function coachTurn(userMsg) {
     renderChat();
     chat.lastElementChild?.scrollIntoView({ behavior: "smooth", block: "start" });
     setBusy(false);
-    await playCoach(data);
+    if (streamed) {
+      live = data;
+      await q.done();
+      if (my !== playGen) return; // interrupted
+      mic.classList.remove("speaking");
+      if (data.target) setCaption(data.target);
+    } else {
+      await q.done(); // a filler, if one was said
+      await playCoach(data);
+    }
     if (data.pause) pauseCoach();
     else autoListen();
   } catch (e) {
@@ -1262,20 +1363,46 @@ async function coachTurn(userMsg) {
 }
 
 // Read her answer aloud, piece by piece: English in an English voice, Chinese in a Chinese voice.
+async function speakSeg(seg, data) {
+  const slow = data.result === "close" || data.result === "retry";
+  if (seg.lang === "zh") {
+    if (!seg.pinyin) {
+      const o = { zh: seg.text };
+      await addPinyin(o);
+      seg.pinyin = o.pinyin;
+    }
+    setCaption({ zh: seg.text, pinyin: seg.pinyin, en: data.target?.zh === seg.text ? data.target.en : "" });
+    await speak(seg.text, slow ? Math.max(0.5, db.settings.rate - 0.25) : Math.max(0.6, db.settings.rate - 0.1), "zh-CN");
+  } else {
+    setCaption({ help: seg.text });
+    await speak(seg.text, 1, "en-US");
+  }
+}
+
+// Plays segments in order as they are pushed (while the answer is still streaming in).
+function speechQueue(my, getData) {
+  const segs = [];
+  let running = null;
+  const run = async () => {
+    while (segs.length) {
+      if (my !== playGen || coachPaused || $("#talk").hidden) { segs.length = 0; break; }
+      await speakSeg(segs.shift(), getData());
+    }
+    running = null;
+  };
+  return {
+    push(seg) { segs.push(seg); if (!running) running = run(); },
+    async done() { while (running) await running; },
+  };
+}
+
 async function playCoach(data) {
   const my = ++playGen;
   mic.classList.add("speaking");
   setStatus("Bīng is talking…", "");
-  const slow = data.result === "close" || data.result === "retry";
   for (const seg of data.say || []) {
     if ($("#talk").hidden || coachPaused || my !== playGen) break;
-    if (seg.lang === "zh") {
-      setCaption({ zh: seg.text, pinyin: seg.pinyin, en: data.target?.zh === seg.text ? data.target.en : "" });
-      await speak(seg.text, slow ? Math.max(0.5, db.settings.rate - 0.25) : Math.max(0.6, db.settings.rate - 0.1), "zh-CN");
-    } else {
-      setCaption({ help: seg.text });
-      await speak(seg.text, 1, "en-US");
-    }
+    await speakSeg(seg, data);
   }
   if (my !== playGen) return; // interrupted: whoever interrupted decides what happens next
   mic.classList.remove("speaking");

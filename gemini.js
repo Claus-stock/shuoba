@@ -6,15 +6,29 @@ const API = "https://generativelanguage.googleapis.com/v1beta";
 // Used only if Google's model list can't be read: newest first.
 const FALLBACK_MODELS = ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash", "gemini-flash-latest"];
 const RETRY_DELAYS = [1500, 4000]; // after a busy/overloaded answer, wait and try the same model again
+// How much the model may think before answering: as little as the model allows (a conversation
+// needs speed). If a model rejects a level, the next one is tried; what worked is remembered.
+const THINKING_LEVELS = ["minimal", "low", null];
+const thinkingFor = new Map();
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// onModel(name): remember the model that worked. onBusy(text): tell the user we're retrying.
-export async function askGemini({ key, model, system, messages, maxTokens = 1024, onModel, onBusy }) {
+// One JSON answer. onModel(name): remember the model that worked. onBusy(text): tell the user we're retrying.
+export function askGemini({ key, model, system, messages, maxTokens = 1024, onModel, onBusy }) {
+  return withModels({ key, model, onModel, onBusy }, (m) => call(key, m, system, messages, maxTokens));
+}
+
+// A streamed plain-text answer: onDelta(text) gets each piece as soon as Google sends it, so speaking
+// can start before the whole answer exists. Resolves with the full text.
+export function streamGemini({ key, model, system, messages, maxTokens = 1024, onModel, onBusy, onDelta }) {
+  return withModels({ key, model, onModel, onBusy }, (m) => streamCall(key, m, system, messages, maxTokens, onDelta));
+}
+
+// Try the remembered model first. If it is busy, retry with a pause; if it is gone or stays busy,
+// ask Google which Flash models this key can use (newest first, Flash-Lite last) and work down the list.
+async function withModels({ key, model, onModel, onBusy }, attempt) {
   if (!key) throw { code: "no_gkey" };
   let lastErr = null;
-  // Try the remembered model first. Only if it fails, ask Google which Flash models this key can
-  // use (newest first, Flash-Lite last) and work down that list.
   const tried = new Set();
   let queue = model ? [model] : [];
   let listed = false;
@@ -31,18 +45,19 @@ export async function askGemini({ key, model, system, messages, maxTokens = 1024
     tried.add(m);
     // Only the first model gets repeated tries; after that, move quickly down the list.
     const delays = tried.size === 1 ? RETRY_DELAYS : [];
-    for (let attempt = 0; attempt <= delays.length; attempt++) {
+    for (let i = 0; i <= delays.length; i++) {
       try {
-        const res = await call(key, m, system, messages, maxTokens);
+        const res = await attempt(m);
         if (m !== model) onModel?.(m);
         return res;
       } catch (e) {
         lastErr = { ...e, model: m };
-        if (isModelGone(e)) break; // this model is retired or not on this key: try the next one
+        if (e?.started) throw lastErr; // part of the answer was already used: don't start over
+        if (isModelGone(e)) break; // retired or not on this key: next model
         if (!isBusy(e)) throw lastErr; // a real error (bad key, blocked, …): stop here
-        if (attempt < delays.length) {
+        if (i < delays.length) {
           onBusy?.("Google is busy — trying again…");
-          await sleep(delays[attempt]);
+          await sleep(delays[i]);
         } else {
           onBusy?.("Google is busy — trying another model…");
         }
@@ -74,25 +89,24 @@ async function flashModels(key) {
   }
 }
 
-// How much the model may think before answering: as little as the model allows (a conversation
-// needs speed). If a model rejects a level, try the next one, and finally no setting at all.
-const THINKING_LEVELS = ["minimal", "low", null];
-
-async function call(key, model, system, messages, maxTokens, level = 0) {
+function requestBody(model, system, messages, maxTokens, json, level) {
   const body = {
     systemInstruction: { parts: [{ text: system }] },
     contents: messages.map((m) => ({ role: m.role === "assistant" ? "model" : "user", parts: [{ text: m.content }] })),
-    generationConfig: { responseMimeType: "application/json", temperature: 0.7, maxOutputTokens: maxTokens },
+    generationConfig: { temperature: 0.7, maxOutputTokens: maxTokens },
   };
+  if (json) body.generationConfig.responseMimeType = "application/json";
   const thinking = THINKING_LEVELS[level];
   if (thinking) {
     if (/^gemini-2\.5-flash/.test(model)) body.generationConfig.thinkingConfig = { thinkingBudget: 0 };
     else if (/^gemini-[3-9]/.test(model)) body.generationConfig.thinkingConfig = { thinkingLevel: thinking };
   }
+  return body;
+}
 
-  let r;
+async function post(url, key, body) {
   try {
-    r = await fetch(`${API}/models/${model}:generateContent`, {
+    return await fetch(url, {
       method: "POST",
       headers: { "content-type": "application/json", "x-goog-api-key": key },
       body: JSON.stringify(body),
@@ -100,15 +114,23 @@ async function call(key, model, system, messages, maxTokens, level = 0) {
   } catch {
     throw { code: "gemini_offline" };
   }
+}
+
+async function httpError(r) {
+  const j = await r.json().catch(() => ({}));
+  return { code: "gemini_http", status: r.status, message: j.error?.message || r.statusText };
+}
+const thinkingRejected = (err, body) => err.status === 400 && /thinking/i.test(err.message) && !!body.generationConfig.thinkingConfig;
+
+async function call(key, model, system, messages, maxTokens, level = thinkingFor.get(model) ?? 0) {
+  const body = requestBody(model, system, messages, maxTokens, true, level);
+  const r = await post(`${API}/models/${model}:generateContent`, key, body);
   if (!r.ok) {
-    const j = await r.json().catch(() => ({}));
-    const err = { code: "gemini_http", status: r.status, message: j.error?.message || r.statusText };
-    // If this model doesn't accept the thinking setting, try the next level.
-    if (r.status === 400 && /thinking/i.test(err.message) && body.generationConfig.thinkingConfig) {
-      return call(key, model, system, messages, maxTokens, level + 1);
-    }
+    const err = await httpError(r);
+    if (thinkingRejected(err, body)) return call(key, model, system, messages, maxTokens, level + 1);
     throw err;
   }
+  thinkingFor.set(model, level);
   const j = await r.json();
   if (j.promptFeedback?.blockReason) throw { code: "refusal" };
   const cand = j.candidates?.[0];
@@ -119,7 +141,48 @@ async function call(key, model, system, messages, maxTokens, level = 0) {
   return { data, raw: text };
 }
 
-function parseJson(text) {
+async function streamCall(key, model, system, messages, maxTokens, onDelta, level = thinkingFor.get(model) ?? 0) {
+  const body = requestBody(model, system, messages, maxTokens, false, level);
+  const r = await post(`${API}/models/${model}:streamGenerateContent?alt=sse`, key, body);
+  if (!r.ok) {
+    const err = await httpError(r);
+    if (thinkingRejected(err, body)) return streamCall(key, model, system, messages, maxTokens, onDelta, level + 1);
+    throw err;
+  }
+  thinkingFor.set(model, level);
+  const reader = r.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = "";
+  let full = "";
+  try {
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+      let i;
+      while ((i = buf.indexOf("\n")) >= 0) {
+        const line = buf.slice(0, i).trim();
+        buf = buf.slice(i + 1);
+        if (!line.startsWith("data:")) continue;
+        let j;
+        try { j = JSON.parse(line.slice(5)); } catch { continue; }
+        if (j.promptFeedback?.blockReason) throw { code: "refusal" };
+        const parts = j.candidates?.[0]?.content?.parts || [];
+        const t = parts.filter((p) => !p.thought).map((p) => p.text || "").join("");
+        if (t) {
+          full += t;
+          onDelta?.(t);
+        }
+      }
+    }
+  } catch (e) {
+    throw { ...(e?.code ? e : { code: "gemini_offline" }), started: full.length > 0 };
+  }
+  if (!full.trim()) throw { code: "bad_json", message: "empty answer" };
+  return full;
+}
+
+export function parseJson(text) {
   const t = String(text).replace(/```(?:json)?/gi, "").trim();
   const start = t.indexOf("{");
   const end = t.lastIndexOf("}");
